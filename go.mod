@@ -4,13 +4,14 @@ go 1.26.2
 
 require (
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142
-	github.com/google/uuid v1.6.0
+	github.com/galgotech/heddle-lang v0.0.0
 	github.com/stretchr/testify v1.11.1
+	go.uber.org/zap v1.21.0
 	google.golang.org/grpc v1.80.0
-	google.golang.org/protobuf v1.36.11
 )
 
 require (
+	github.com/JohnCGriffin/overflow v0.0.0-20211019200055-46fa312c352c // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/google/flatbuffers v24.3.25+incompatible // indirect
@@ -19,6 +20,8 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
+	go.uber.org/atomic v1.9.0 // indirect
+	go.uber.org/multierr v1.8.0 // indirect
 	golang.org/x/exp v0.0.0-20240222234643-814bf88cf225 // indirect
 	golang.org/x/mod v0.31.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
@@ -29,5 +32,6 @@ require (
 	golang.org/x/tools v0.40.0 // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

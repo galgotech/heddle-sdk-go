@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/apache/arrow/go/v18/arrow/flight"
+	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
 	"github.com/galgotech/heddle-lang/pkg/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,7 +54,7 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 		resources[name] = res.ResourceSchema
 	}
 
-	reg := PluginRegistration{
+	reg := baseplugin.PluginRegistration{
 		Namespace: p.Namespace,
 		Resources: resources,
 	}
@@ -74,7 +75,7 @@ type mockFlightServer struct {
 }
 
 func (s *mockFlightServer) DoAction(req *flight.Action, stream flight.FlightService_DoActionServer) error {
-	if req.Type == ActionRegisterPlugin {
+	if req.Type == baseplugin.ActionRegisterPlugin {
 		s.registered = true
 		return stream.Send(&flight.Result{Body: []byte("ok")})
 	}

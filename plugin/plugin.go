@@ -376,7 +376,7 @@ func (p *Plugin) startHeartbeat(ctx context.Context, client flight.Client) {
 	for {
 		select {
 		case <-ticker.C:
-			hb := Heartbeat{
+			hb := baseplugin.Heartbeat{
 				Namespace: p.Namespace,
 				Timestamp: time.Now(),
 				Status:    "ready",
@@ -414,14 +414,14 @@ func (p *Plugin) startExecutionLoop(ctx context.Context, client flight.Client) e
 			return fmt.Errorf("exchange stream closed: %w", err)
 		}
 
-		var req ExecuteStepRequest
+		var req baseplugin.ExecuteStepRequest
 		if err := json.Unmarshal(data.DataBody, &req); err != nil {
 			logger.L().Error("Failed to unmarshal request", zap.Error(err))
 			continue
 		}
 
 		// Execute task in a goroutine
-		go func(r ExecuteStepRequest) {
+		go func(r baseplugin.ExecuteStepRequest) {
 			resp := p.executeTask(ctx, r)
 			respBody, err := json.Marshal(resp)
 			if err != nil {
@@ -438,13 +438,13 @@ func (p *Plugin) startExecutionLoop(ctx context.Context, client flight.Client) e
 // executeTask handles the end-to-end execution of a single Heddle Step.
 // It performs Zero-Copy data loading from SHM, reflection-based binding to Go structs,
 // function invocation, and result serialization back to SHM.
-func (p *Plugin) executeTask(ctx context.Context, req ExecuteStepRequest) ExecuteStepResponse {
+func (p *Plugin) executeTask(ctx context.Context, req baseplugin.ExecuteStepRequest) baseplugin.ExecuteStepResponse {
 	// 1. Resolve the requested step in this plugin's namespace.
 	targetStep, ok := p.steps[req.StepName]
 	if !ok {
-		return ExecuteStepResponse{
+		return baseplugin.ExecuteStepResponse{
 			TaskID:       req.TaskID,
-			Status:       StepResponseError,
+			Status:       baseplugin.StepResponseError,
 			ErrorMessage: fmt.Sprintf("step %s not found", req.StepName),
 		}
 	}
@@ -452,9 +452,9 @@ func (p *Plugin) executeTask(ctx context.Context, req ExecuteStepRequest) Execut
 	// 2. Hydrate the step configuration from the provided JSON.
 	configType := targetStep.ConfigType
 	if configType.Kind() == reflect.Pointer {
-		return ExecuteStepResponse{
+		return baseplugin.ExecuteStepResponse{
 			TaskID:       req.TaskID,
-			Status:       StepResponseError,
+			Status:       baseplugin.StepResponseError,
 			ErrorMessage: "step config must be a struct",
 		}
 	}
@@ -462,9 +462,9 @@ func (p *Plugin) executeTask(ctx context.Context, req ExecuteStepRequest) Execut
 	configVal := reflect.New(configType)
 	if req.ConfigJSON != "" {
 		if err := json.Unmarshal([]byte(req.ConfigJSON), configVal.Interface()); err != nil {
-			return ExecuteStepResponse{
+			return baseplugin.ExecuteStepResponse{
 				TaskID:       req.TaskID,
-				Status:       StepResponseError,
+				Status:       baseplugin.StepResponseError,
 				ErrorMessage: fmt.Errorf("failed to unmarshal config: %w", err).Error(),
 			}
 		}
@@ -485,9 +485,9 @@ func (p *Plugin) executeTask(ctx context.Context, req ExecuteStepRequest) Execut
 	inputVal, outputVal := targetStep.NewInputOutput()
 	if len(columns) > 0 {
 		if err := bind(inputVal, targetStep.inputFieldsIndex, columns); err != nil {
-			return ExecuteStepResponse{
+			return baseplugin.ExecuteStepResponse{
 				TaskID:       req.TaskID,
-				Status:       StepResponseError,
+				Status:       baseplugin.StepResponseError,
 				ErrorMessage: fmt.Sprintf("failed to bind input frame: %v", err),
 			}
 		}
@@ -503,18 +503,18 @@ func (p *Plugin) executeTask(ctx context.Context, req ExecuteStepRequest) Execut
 	// 5. Handle output results and commit data to SHM.
 	errResult := results[0]
 	if !errResult.IsNil() {
-		return ExecuteStepResponse{
+		return baseplugin.ExecuteStepResponse{
 			TaskID:       req.TaskID,
-			Status:       StepResponseError,
+			Status:       baseplugin.StepResponseError,
 			ErrorMessage: errResult.Interface().(error).Error(),
 		}
 	}
 
 	// Check if the output is a VoidFrame (explicitly no-data).
 	if targetStep.OutputType == reflect.TypeFor[VoidFrame]() {
-		return ExecuteStepResponse{
+		return baseplugin.ExecuteStepResponse{
 			TaskID: req.TaskID,
-			Status: StepResponseSuccess,
+			Status: baseplugin.StepResponseSuccess,
 		}
 	}
 
@@ -571,9 +571,9 @@ func (p *Plugin) executeTask(ctx context.Context, req ExecuteStepRequest) Execut
 			dirt = dataFrame.dirt
 		default:
 			logger.L().Error("unsupported output field type", zap.String("type", fValue.Type().String()))
-			return ExecuteStepResponse{
+			return baseplugin.ExecuteStepResponse{
 				TaskID:       req.TaskID,
-				Status:       StepResponseError,
+				Status:       baseplugin.StepResponseError,
 				ErrorMessage: fmt.Sprintf("unsupported output field type %s", fValue.Type()),
 			}
 		}
@@ -581,9 +581,9 @@ func (p *Plugin) executeTask(ctx context.Context, req ExecuteStepRequest) Execut
 		if arr != nil && !reflect.ValueOf(arr).IsNil() {
 			path, err := locality.WriteArrowArrayOnlyToShm(arr)
 			if err != nil {
-				return ExecuteStepResponse{
+				return baseplugin.ExecuteStepResponse{
 					TaskID:       req.TaskID,
-					Status:       StepResponseError,
+					Status:       baseplugin.StepResponseError,
 					ErrorMessage: fmt.Sprintf("failed to write output frame: %v", err),
 				}
 			} else {
@@ -608,9 +608,9 @@ func (p *Plugin) executeTask(ctx context.Context, req ExecuteStepRequest) Execut
 		}
 	}
 
-	return ExecuteStepResponse{
+	return baseplugin.ExecuteStepResponse{
 		TaskID:        req.TaskID,
-		Status:        StepResponseSuccess,
+		Status:        baseplugin.StepResponseSuccess,
 		OutputHandles: outputHandles,
 		DirtyHandles:  dirtyHandles,
 	}

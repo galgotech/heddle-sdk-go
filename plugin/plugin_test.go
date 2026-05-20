@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/flight"
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
+	"github.com/galgotech/heddle-lang/pkg/runtime"
 	"github.com/galgotech/heddle-lang/pkg/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,8 +30,7 @@ func (r *TestResource) Start(ctx context.Context) error { return nil }
 
 func TestRegisterResource(t *testing.T) {
 	p := New("test")
-	res := &TestResource{Host: "localhost", Port: 5432}
-	err := p.RegisterResource("test_res", res)
+	err := p.RegisterResource("test_res", TestResource{})
 	require.NoError(t, err)
 
 	reg, ok := p.resources["test_res"]
@@ -43,7 +44,7 @@ func TestRegisterResource(t *testing.T) {
 
 func TestPluginRegistrationIncludesResources(t *testing.T) {
 	p := New("test")
-	err := p.RegisterResource("my_resource", &TestResource{Host: "localhost", Port: 5432})
+	err := p.RegisterResource("my_resource", TestResource{})
 	require.NoError(t, err)
 
 	// Since we want to test the registration structure, let's manually build it
@@ -69,6 +70,26 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 	assert.Contains(t, string(body), "my_resource")
 }
 
+func TestInitializeResource(t *testing.T) {
+	p := New("test")
+	err := p.RegisterResource("test_res", TestResource{})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	config := map[string]any{"Host": "127.0.0.1", "Port": 8080}
+	err = p.InitializeResource(ctx, "my_active_res", "test_res", config)
+	require.NoError(t, err)
+	require.NotNil(t, p.activeResources["my_active_res"])
+
+	activeRes, ok := p.activeResources["my_active_res"]
+	require.True(t, ok)
+
+	testRes, ok := activeRes.(*TestResource)
+	require.True(t, ok)
+	assert.Equal(t, "127.0.0.1", testRes.Host)
+	assert.Equal(t, 8080, testRes.Port)
+}
+
 type mockFlightServer struct {
 	flight.BaseFlightServer
 	registered bool
@@ -87,7 +108,7 @@ func (s *mockFlightServer) DoExchange(stream flight.FlightService_DoExchangeServ
 }
 
 func TestPluginConnectRetry(t *testing.T) {
-	socketPath := "/tmp/heddle-worker.sock" // Use the default for now as it's hardcoded
+	socketPath := runtime.WorkerUDSPath // Use the default for now as it's hardcoded
 	_ = os.Remove(socketPath)
 
 	p := New("test-namespace")
@@ -183,7 +204,7 @@ func TestStepRegistration_NewInputOutput(t *testing.T) {
 		outputFieldsIndex: []int{1}, // Index 1 is Result
 	}
 
-	inputVal, outputVal := reg.NewInputOutput()
+	inputVal, outputVal := reg.newInputOutput()
 
 	// Verify input
 	assert.Equal(t, reflect.Pointer, inputVal.Kind())
@@ -228,4 +249,95 @@ func TestRegisterStepMetadata(t *testing.T) {
 	assert.Contains(t, reg.SourceCode, "func MyTestStep")
 	assert.Contains(t, reg.SourceCode, "return nil")
 	assert.Contains(t, reg.SourceFile, "plugin_test.go")
+}
+
+type TestBindInput struct {
+	HeddleFrame
+	A *Float64
+	B *Float64
+}
+
+type TestBindOutput struct {
+	HeddleFrame
+	A *Float64
+	B *Float64
+}
+
+func TestBindWithRegistrationNewInputOutput(t *testing.T) {
+	reg := &StepRegistration{
+		InputType:              reflect.TypeFor[*TestBindInput](),
+		OutputType:             reflect.TypeFor[*TestBindOutput](),
+		inputHeddleFrameIndex:  0,
+		outputHeddleFrameIndex: 0,
+		inputFieldsIndex:       []int{1, 2},
+		outputFieldsIndex:      []int{1, 2},
+	}
+
+	columns := make(map[string]arrow.Array)
+	columns["A"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
+	columns["B"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
+
+	input, output := reg.newInputOutput()
+	assert.NotNil(t, input)
+	assert.NotNil(t, output)
+
+	err := bind(input, reg.inputFieldsIndex, columns)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 1.1, input.Interface().(*TestBindInput).A.Value(0))
+	assert.Equal(t, 2.2, input.Interface().(*TestBindInput).A.Value(1))
+	assert.Equal(t, 1.1, input.Interface().(*TestBindInput).B.Value(0))
+	assert.Equal(t, 2.2, input.Interface().(*TestBindInput).B.Value(1))
+
+	// Now bind to output
+	err = bind(output, reg.outputFieldsIndex, columns)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 1.1, output.Interface().(*TestBindOutput).A.Value(0))
+	assert.Equal(t, 2.2, output.Interface().(*TestBindOutput).A.Value(1))
+	assert.Equal(t, 1.1, output.Interface().(*TestBindOutput).B.Value(0))
+	assert.Equal(t, 2.2, output.Interface().(*TestBindOutput).B.Value(1))
+}
+
+type TestFrame struct {
+	HeddleFrame
+	A *Float64
+	B *Float64
+}
+
+func TestBindAllColumns(t *testing.T) {
+
+	columns := make(map[string]arrow.Array)
+	columns["A"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
+	columns["B"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
+
+	frameType := reflect.TypeFor[*TestFrame]()
+	frameValue := reflect.New(frameType.Elem())
+	v := frameValue.Elem()
+	v.Field(1).Set(reflect.New(v.Field(1).Type().Elem()))
+	v.Field(2).Set(reflect.New(v.Field(2).Type().Elem()))
+
+	err := bind(frameValue, []int{1, 2}, columns)
+	assert.NoError(t, err)
+
+	frame := frameValue.Interface().(*TestFrame)
+	assert.NotNil(t, frame.A.arrayFloat64)
+	assert.NotNil(t, frame.B.arrayFloat64)
+	assert.Equal(t, 2, frame.A.Len())
+	assert.Equal(t, 2, frame.B.Len())
+}
+
+func TestBindPartialColumns(t *testing.T) {
+	columns := make(map[string]arrow.Array)
+	columns["A"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
+
+	frameType := reflect.TypeFor[*TestFrame]()
+	frameValue := reflect.New(frameType.Elem())
+	v := frameValue.Elem()
+	v.Field(1).Set(reflect.New(v.Field(1).Type().Elem()))
+	v.Field(2).Set(reflect.New(v.Field(2).Type().Elem()))
+
+	err := bind(frameValue, []int{1, 2}, columns)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "column \"B\" is required but missing")
 }

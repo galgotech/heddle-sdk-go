@@ -17,7 +17,7 @@ type SchemaTable struct {
 
 func TestExtractSchema(t *testing.T) {
 	// 1. Extract schema from struct
-	s, err := ExtractInputOutputSchema(reflect.TypeFor[*SchemaTable]())
+	s, err := extractInputOutputSchema(reflect.TypeFor[*SchemaTable]())
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
@@ -45,7 +45,7 @@ func TestExtractConfigSchema(t *testing.T) {
 		Hidden  string `json:"-"`
 	}
 
-	s, err := ExtractResourceAndConfigSchema(reflect.TypeFor[ConfigTest]())
+	s, err := extractResourceAndConfigSchema(reflect.TypeFor[ConfigTest]())
 	require.NoError(t, err)
 	require.NotNil(t, s)
 

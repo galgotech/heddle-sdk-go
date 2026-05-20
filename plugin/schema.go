@@ -8,8 +8,8 @@ import (
 	"github.com/galgotech/heddle-lang/pkg/schema"
 )
 
-// ExtractResourceAndConfigSchema performs type introspection to derive a basic JSON schema for Step/Resource configurations.
-func ExtractResourceAndConfigSchema(t reflect.Type) (*schema.ResourceAndConfigSchema, error) {
+// extractResourceAndConfigSchema performs type introspection to derive a basic JSON schema for Step/Resource configurations.
+func extractResourceAndConfigSchema(t reflect.Type) (*schema.ResourceAndConfigSchema, error) {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
@@ -49,8 +49,8 @@ func ExtractResourceAndConfigSchema(t reflect.Type) (*schema.ResourceAndConfigSc
 	return res, nil
 }
 
-// ExtractInputOutputSchema uses reflection to derive a Heddle schema from a reflect.Type (expected to be a struct).
-func ExtractInputOutputSchema(t reflect.Type) (*schema.FrameSchema, error) {
+// extractInputOutputSchema uses reflection to derive a Heddle schema from a reflect.Type (expected to be a struct).
+func extractInputOutputSchema(t reflect.Type) (*schema.FrameSchema, error) {
 	if t == nil {
 		return nil, fmt.Errorf("ExtractSchema: nil type or generic interface not allowed; must use a struct embedding HeddleFrame")
 	}
@@ -72,15 +72,8 @@ func ExtractInputOutputSchema(t reflect.Type) (*schema.FrameSchema, error) {
 		return &schema.FrameSchema{IsDynamic: true}, nil
 	}
 
-	// Verify it embeds HeddleFrame
-	hasFrame := false
-	for field := range t.Fields() {
-		if field.Type == reflect.TypeFor[HeddleFrame]() {
-			hasFrame = true
-			break
-		}
-	}
-	if !hasFrame {
+	// Verify it embeds HeddleFrame recursively
+	if !embedsHeddleFrame(t) {
 		return nil, fmt.Errorf("ExtractSchema: type %s does not embed HeddleFrame", t.Name())
 	}
 
@@ -89,10 +82,10 @@ func ExtractInputOutputSchema(t reflect.Type) (*schema.FrameSchema, error) {
 	}
 
 	for f := range t.Fields() {
-		fieldType := f.Type
-		if fieldType == reflect.TypeFor[HeddleFrame]() {
+		if f.Anonymous {
 			continue
 		}
+		fieldType := f.Type
 
 		if fieldType.Kind() != reflect.Pointer {
 			return nil, fmt.Errorf("ExtractSchema: expected pointer to HeddleFrame field, got %s", fieldType.Kind())
@@ -137,4 +130,26 @@ func ExtractInputOutputSchema(t reflect.Type) (*schema.FrameSchema, error) {
 	}
 
 	return res, nil
+}
+
+// embedsHeddleFrame checks if a reflect.Type embeds HeddleFrame recursively.
+func embedsHeddleFrame(t reflect.Type) bool {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	if t == reflect.TypeFor[HeddleFrame]() {
+		return true
+	}
+	for field := range t.Fields() {
+		if field.Type == reflect.TypeFor[HeddleFrame]() {
+			return true
+		}
+		if field.Anonymous && embedsHeddleFrame(field.Type) {
+			return true
+		}
+	}
+	return false
 }

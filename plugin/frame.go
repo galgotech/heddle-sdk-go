@@ -366,16 +366,6 @@ func (h *HeddleFrame) Divide(ctx context.Context, a arrow.Array, b float64, c ar
 	)
 }
 
-func toDatum(a any) (compute.Datum, error) {
-	if a == nil {
-		return nil, nil
-	}
-	if arr, ok := a.(arrow.Array); ok {
-		return &compute.ArrayDatum{Value: arr.Data()}, nil
-	}
-	return nil, fmt.Errorf("convert to datum error - input %T is not an arrow.Array", a)
-}
-
 func (h *HeddleFrame) exec(ctx context.Context, name string, output any, inputs ...compute.Datum) error {
 	execCtx := compute.DefaultExecCtx()
 
@@ -443,4 +433,14 @@ func (f *DynamicFrame) GetColumn(name string) any {
 		return nil
 	}
 	return f.Columns[name]
+}
+
+func toDatum(a any) (compute.Datum, error) {
+	if a == nil {
+		return nil, nil
+	}
+	if arr, ok := a.(arrow.Array); ok {
+		return &compute.ArrayDatum{Value: arr.Data()}, nil
+	}
+	return nil, fmt.Errorf("convert to datum error - input %T is not an arrow.Array", a)
 }

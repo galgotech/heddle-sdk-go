@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,110 +25,59 @@ import (
 
 	"github.com/galgotech/heddle-lang/pkg/logger"
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
+	heddleruntime "github.com/galgotech/heddle-lang/pkg/runtime"
 	"github.com/galgotech/heddle-lang/pkg/runtime/locality"
 	"github.com/galgotech/heddle-lang/pkg/schema"
 )
 
-// ResourceRegistration maintains metadata and the execution handle for a Heddle Resource.
-// It allows the plugin to expose custom infrastructure or stateful components to the Heddle DSL.
-type ResourceRegistration struct {
-	Name           string
-	ResourceSchema *schema.ResourceAndConfigSchema
-	ResourceType   reflect.Type
-	Resource       Resource
-	Documentation  string
-	SourceCode     string
-	SourceFile     string
-	SourceLine     int
-}
-
-// StepRegistration stores the execution contract for a Heddle Step.
-// It captures the function signature, inferred JSON schemas for configuration,
-// and the mapping between Arrow schemas and Go struct types.
-type StepRegistration struct {
-	Name         string
-	ConfigSchema *schema.ResourceAndConfigSchema // JSON schema inferred from the configuration struct for DSL-side validation
-	ConfigType   reflect.Type
-	InputType    reflect.Type
-	OutputType   reflect.Type
-	Func         reflect.Value
-	InputSchema  *schema.FrameSchema
-	OutputSchema *schema.FrameSchema
-
-	Documentation string
-	SourceCode    string
-	SourceFile    string
-	SourceLine    int
-
-	// Pre-calculated indices for optimized initialization
-	inputHeddleFrameIndex  int
-	outputHeddleFrameIndex int
-	inputFieldsIndex       []int
-	outputFieldsIndex      []int
-}
-
-// NewInputOutput initializes both input and output frames using pre-calculated indices.
-// It pre-populates the HeddleFrame schema and initializes any nil field pointers.
-func (s *StepRegistration) NewInputOutput() (reflect.Value, reflect.Value) {
-	inputVal := reflect.New(s.InputType.Elem())
-	outputVal := reflect.New(s.OutputType.Elem())
-
-	s.initFrame(inputVal, s.inputFieldsIndex)
-	s.initFrame(outputVal, s.outputFieldsIndex)
-
-	return inputVal, outputVal
-}
-
-func (s *StepRegistration) initFrame(val reflect.Value, indices []int) {
-	v := val.Elem()
-
-	// Initialize all pointer fields
-	for _, i := range indices {
-		f := v.Field(i)
-		f.Set(reflect.New(f.Type().Elem()))
-	}
-}
-
 type Plugin struct {
-	Namespace     string
-	Language      string
-	WorkerAddress string
-	resources     map[string]ResourceRegistration
-	steps         map[string]StepRegistration
-	Ready         chan struct{}
+	Namespace string
+	Language  string
+	resources map[string]resourceRegistration
+	steps     map[string]StepRegistration
+	Ready     chan struct{}
+
+	activeResources   map[string]Resource
+	activeResourcesMu sync.RWMutex
 }
 
-// RegisterResource adds a new resource initializer to the plugin's internal registry.
+// RegisterResource adds a new resource type to the plugin's internal registry.
 // These resources can be referenced in .he files to manage external state or connections.
-func (p *Plugin) RegisterResource(name string, resource Resource) error {
+func (p *Plugin) RegisterResource(name string, resource any) error {
 	typ := reflect.TypeOf(resource)
 
-	if typ.Kind() != reflect.Pointer {
-		return fmt.Errorf("resource %q must be a pointer to a struct", name)
+	if typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
 	}
 
-	typ = typ.Elem()
 	if typ.Kind() != reflect.Struct {
-		return fmt.Errorf("resource %q must be a pointer to a struct", name)
+		return fmt.Errorf("resource %q must be a struct or a pointer to a struct", name)
 	}
 
-	resourceSchema, err := ExtractResourceAndConfigSchema(typ)
+	// Validate that the pointer to this struct implements the Resource interface
+	ptrTyp := reflect.PointerTo(typ)
+	if !ptrTyp.Implements(reflect.TypeFor[Resource]()) {
+		return fmt.Errorf("resource %q (pointer type %s) must implement the Resource interface", name, ptrTyp)
+	}
+
+	resourceSchema, err := extractResourceAndConfigSchema(typ)
 	if err != nil {
 		logger.L().Error("Failed to extract resource schema", zap.String("resource", name), zap.Error(err))
 		return fmt.Errorf("resource %q config: %w", name, err)
 	}
 
+	// Use reflection on reflect.New(typ) to find the Start method pointer for metadata extraction
 	var fnPtr uintptr
-	if v := reflect.ValueOf(resource).MethodByName("Start"); v.IsValid() {
+	dummyVal := reflect.New(typ)
+	if v := dummyVal.MethodByName("Start"); v.IsValid() {
 		fnPtr = v.Pointer()
 	}
 	doc, code, file, line := extractMetadata(fnPtr)
 
-	p.resources[name] = ResourceRegistration{
+	p.resources[name] = resourceRegistration{
 		Name:           name,
 		ResourceSchema: resourceSchema,
 		ResourceType:   typ,
-		Resource:       resource,
 		Documentation:  doc,
 		SourceCode:     code,
 		SourceFile:     file,
@@ -157,19 +107,19 @@ func (p *Plugin) RegisterStep(name string, fn any) error {
 	inputType := typ.In(2)
 	outputType := typ.In(3)
 
-	configSchema, err := ExtractResourceAndConfigSchema(configType)
+	configSchema, err := extractResourceAndConfigSchema(configType)
 	if err != nil {
 		logger.L().Error("Failed to extract step config schema", zap.String("step", name), zap.Error(err))
 		return fmt.Errorf("step %q config: %w", name, err)
 	}
 
-	inputSchema, err := ExtractInputOutputSchema(inputType)
+	inputSchema, err := extractInputOutputSchema(inputType)
 	if err != nil {
 		logger.L().Error("Failed to extract step input schema", zap.String("step", name), zap.Error(err))
 		return fmt.Errorf("step %q input: %w", name, err)
 	}
 
-	outputSchema, err := ExtractInputOutputSchema(outputType)
+	outputSchema, err := extractInputOutputSchema(outputType)
 	if err != nil {
 		logger.L().Error("Failed to extract step output schema", zap.String("step", name), zap.Error(err))
 		return fmt.Errorf("step %q output: %w", name, err)
@@ -182,7 +132,7 @@ func (p *Plugin) RegisterStep(name string, fn any) error {
 		f := inType.Field(i)
 		if f.Type == reflect.TypeFor[HeddleFrame]() || f.Type == reflect.TypeFor[DynamicFrame]() {
 			inputHeddleFrameIndex = i
-		} else if inType != reflect.TypeFor[DynamicFrame]() {
+		} else if !f.Anonymous {
 			inputFieldsIndex = append(inputFieldsIndex, i)
 		}
 	}
@@ -194,7 +144,7 @@ func (p *Plugin) RegisterStep(name string, fn any) error {
 		f := outType.Field(i)
 		if f.Type == reflect.TypeFor[HeddleFrame]() || f.Type == reflect.TypeFor[DynamicFrame]() {
 			outputHeddleFrameIndex = i
-		} else if outType != reflect.TypeFor[DynamicFrame]() {
+		} else if !f.Anonymous {
 			outputFieldsIndex = append(outputFieldsIndex, i)
 		}
 	}
@@ -240,11 +190,7 @@ func (p *Plugin) Start() error {
 	// 1. Start Retry Loop
 	for {
 		// 1.1 Connect to Worker (handle UDS if path starts with / or unix:)
-		target := p.WorkerAddress
-		if target == "" {
-			target = "unix:///tmp/heddle-worker.sock"
-		}
-
+		target := heddleruntime.WorkerUDSPath
 		// Establish the gRPC connection to the Worker.
 		conn, err = grpc.NewClient(target, opts...)
 		if err != nil {
@@ -472,15 +418,43 @@ func (p *Plugin) executeTask(ctx context.Context, request baseplugin.ExecuteStep
 		}
 	}
 
-	// 2.1 Inject resource if provided
+	// 2.1 Auto-initialize and inject resource if provided
+	if len(request.Resources) > 0 {
+		for rID, resDef := range request.Resources {
+			p.activeResourcesMu.RLock()
+			_, initialized := p.activeResources[rID]
+			p.activeResourcesMu.RUnlock()
+			if !initialized {
+				logger.L().Info("Auto-initializing resource requested by worker", zap.String("id", rID), zap.String("type", resDef.Type))
+				err := p.InitializeResource(ctx, rID, resDef.Type, resDef.Config)
+				if err != nil {
+					return baseplugin.ExecuteStepResponse{
+						TaskID:       request.TaskID,
+						Status:       baseplugin.StepResponseError,
+						ErrorMessage: fmt.Sprintf("failed to auto-initialize resource %s: %v", rID, err),
+					}
+				}
+			}
+		}
+	}
+
 	if request.ResourceId != "" {
-		if resReg, ok := p.resources[request.ResourceId]; ok {
+		p.activeResourcesMu.RLock()
+		res, ok := p.activeResources[request.ResourceId]
+		p.activeResourcesMu.RUnlock()
+		if ok {
 			v := configVal.Elem()
-			for i := 0; i < v.NumField(); i++ {
-				if v.Field(i).Type() == reflect.TypeFor[Config]() {
-					v.Field(i).Addr().Interface().(*Config).SetResource(resReg.Resource)
+			for _, field := range v.Fields() {
+				if field.Type() == reflect.TypeFor[Config]() {
+					field.Addr().Interface().(*Config).SetResource(res)
 					break
 				}
+			}
+		} else {
+			return baseplugin.ExecuteStepResponse{
+				TaskID:       request.TaskID,
+				Status:       baseplugin.StepResponseError,
+				ErrorMessage: fmt.Sprintf("resource %s was not found or initialized", request.ResourceId),
 			}
 		}
 	}
@@ -497,13 +471,27 @@ func (p *Plugin) executeTask(ctx context.Context, request baseplugin.ExecuteStep
 		}
 	}
 
-	inputVal, outputVal := targetStep.NewInputOutput()
+	inputVal, outputVal := targetStep.newInputOutput()
 	if len(columns) > 0 {
 		if targetStep.InputType == reflect.TypeFor[*DynamicFrame]() {
-			df := inputVal.Interface().(*DynamicFrame)
-			df.Columns = make(map[string]any)
-			for name, arr := range columns {
-				df.Columns[name] = arr
+			var df *DynamicFrame
+			if targetStep.InputType == reflect.TypeFor[*DynamicFrame]() {
+				df = inputVal.Interface().(*DynamicFrame)
+			} else {
+				v := inputVal.Elem()
+				for i := 0; i < v.NumField(); i++ {
+					f := v.Field(i)
+					if f.Type() == reflect.TypeFor[DynamicFrame]() {
+						df = f.Addr().Interface().(*DynamicFrame)
+						break
+					}
+				}
+			}
+			if df != nil {
+				df.Columns = make(map[string]any)
+				for name, arr := range columns {
+					df.Columns[name] = arr
+				}
 			}
 		} else {
 			if err := bind(inputVal, targetStep.inputFieldsIndex, columns); err != nil {
@@ -545,58 +533,97 @@ func (p *Plugin) executeTask(ctx context.Context, request baseplugin.ExecuteStep
 	dirtyHandles := make(map[string]string)
 
 	if targetStep.OutputType == reflect.TypeFor[*DynamicFrame]() {
-		df := outputVal.Interface().(*DynamicFrame)
-		for name, colData := range df.Columns {
-			var arr arrow.Array
-			var dirt []uint64
-
-			switch d := colData.(type) {
-			case *Int8: arr = d.arrayInt8; dirt = d.dirt
-			case *Int16: arr = d.arrayInt16; dirt = d.dirt
-			case *Int32: arr = d.arrayInt32; dirt = d.dirt
-			case *Int64: arr = d.arrayInt64; dirt = d.dirt
-			case *Uint8: arr = d.arrayUint8; dirt = d.dirt
-			case *Uint16: arr = d.arrayUint16; dirt = d.dirt
-			case *Uint32: arr = d.arrayUint32; dirt = d.dirt
-			case *Uint64: arr = d.arrayUint64; dirt = d.dirt
-			case *Float32: arr = d.arrayFloat32; dirt = d.dirt
-			case *Float64: arr = d.arrayFloat64; dirt = d.dirt
-			case *Bool: arr = d.arrayBool; dirt = d.dirt
-			case *String: arr = d.arrayString; dirt = d.dirt
-			case arrow.Array: arr = d
-			default:
-				return baseplugin.ExecuteStepResponse{
-					TaskID:       request.TaskID,
-					Status:       baseplugin.StepResponseError,
-					ErrorMessage: fmt.Sprintf("unsupported dynamic output field type %T", colData),
+		var df *DynamicFrame
+		if targetStep.OutputType == reflect.TypeFor[*DynamicFrame]() {
+			df = outputVal.Interface().(*DynamicFrame)
+		} else {
+			v := outputVal.Elem()
+			for i := 0; i < v.NumField(); i++ {
+				f := v.Field(i)
+				if f.Type() == reflect.TypeFor[DynamicFrame]() {
+					df = f.Addr().Interface().(*DynamicFrame)
+					break
 				}
 			}
+		}
+		if df != nil {
+			for name, colData := range df.Columns {
+				var arr arrow.Array
+				var dirt []uint64
 
-			if arr != nil && !reflect.ValueOf(arr).IsNil() {
-				path, err := locality.WriteArrowArrayOnlyToShm(arr)
-				if err != nil {
+				switch d := colData.(type) {
+				case *Int8:
+					arr = d.arrayInt8
+					dirt = d.dirt
+				case *Int16:
+					arr = d.arrayInt16
+					dirt = d.dirt
+				case *Int32:
+					arr = d.arrayInt32
+					dirt = d.dirt
+				case *Int64:
+					arr = d.arrayInt64
+					dirt = d.dirt
+				case *Uint8:
+					arr = d.arrayUint8
+					dirt = d.dirt
+				case *Uint16:
+					arr = d.arrayUint16
+					dirt = d.dirt
+				case *Uint32:
+					arr = d.arrayUint32
+					dirt = d.dirt
+				case *Uint64:
+					arr = d.arrayUint64
+					dirt = d.dirt
+				case *Float32:
+					arr = d.arrayFloat32
+					dirt = d.dirt
+				case *Float64:
+					arr = d.arrayFloat64
+					dirt = d.dirt
+				case *Bool:
+					arr = d.arrayBool
+					dirt = d.dirt
+				case *String:
+					arr = d.arrayString
+					dirt = d.dirt
+				case arrow.Array:
+					arr = d
+				default:
 					return baseplugin.ExecuteStepResponse{
 						TaskID:       request.TaskID,
 						Status:       baseplugin.StepResponseError,
-						ErrorMessage: fmt.Sprintf("failed to write dynamic output frame: %v", err),
+						ErrorMessage: fmt.Sprintf("unsupported dynamic output field type %T", colData),
 					}
 				}
-				outputHandles[name] = path
 
-				if dirt != nil {
-					hasDirty := false
-					for _, b := range dirt {
-						if b != 0 {
-							hasDirty = true
-							break
+				if arr != nil && !reflect.ValueOf(arr).IsNil() {
+					path, err := locality.WriteArrowArrayOnlyToShm(arr)
+					if err != nil {
+						return baseplugin.ExecuteStepResponse{
+							TaskID:       request.TaskID,
+							Status:       baseplugin.StepResponseError,
+							ErrorMessage: fmt.Sprintf("failed to write dynamic output frame: %v", err),
 						}
 					}
-					if hasDirty {
-						dp, err := locality.WriteDirtyToShm(dirt)
-						if err != nil {
-							logger.L().Error("Failed to write dirty bits to SHM", zap.Error(err))
-						} else {
-							dirtyHandles[name] = dp
+					outputHandles[name] = path
+
+					if dirt != nil {
+						hasDirty := false
+						for _, b := range dirt {
+							if b != 0 {
+								hasDirty = true
+								break
+							}
+						}
+						if hasDirty {
+							dp, err := locality.WriteDirtyToShm(dirt)
+							if err != nil {
+								logger.L().Error("Failed to write dirty bits to SHM", zap.Error(err))
+							} else {
+								dirtyHandles[name] = dp
+							}
 						}
 					}
 				}
@@ -728,6 +755,98 @@ func (p *Plugin) ResolveSchema(req baseplugin.ResolveSchemaRequest) baseplugin.R
 		Input:  targetStep.InputSchema,
 		Output: targetStep.OutputSchema,
 	}
+}
+
+// ExecuteStepDirectly executes a registered step directly/locally (without starting gRPC/Arrow Flight, without SHM)
+// using reflection, unmarshaling the configuration, injecting the resource by ID (if provided),
+// and calling the step function.
+func (p *Plugin) ExecuteStepDirectly(ctx context.Context, stepName string, configJSON string, resourceId string, input any, output any) error {
+	step, ok := p.steps[stepName]
+	if !ok {
+		return fmt.Errorf("step %s not found in namespace %s", stepName, p.Namespace)
+	}
+
+	configVal := reflect.New(step.ConfigType)
+	if configJSON != "" {
+		if err := json.Unmarshal([]byte(configJSON), configVal.Interface()); err != nil {
+			return fmt.Errorf("failed to unmarshal config: %w", err)
+		}
+	}
+
+	// Inject resource if provided
+	if resourceId != "" {
+		p.activeResourcesMu.RLock()
+		res, ok := p.activeResources[resourceId]
+		p.activeResourcesMu.RUnlock()
+		if ok {
+			v := configVal.Elem()
+			for i := 0; i < v.NumField(); i++ {
+				if v.Field(i).Type() == reflect.TypeFor[Config]() {
+					v.Field(i).Addr().Interface().(*Config).SetResource(res)
+					break
+				}
+			}
+		} else {
+			return fmt.Errorf("active resource %s not found in namespace %s", resourceId, p.Namespace)
+		}
+	}
+
+	// Call the step function. The step function takes the config struct by value,
+	// and input/output structs by pointer.
+	results := step.Func.Call([]reflect.Value{
+		reflect.ValueOf(ctx),
+		configVal.Elem(),
+		reflect.ValueOf(input),
+		reflect.ValueOf(output),
+	})
+
+	errResult := results[0]
+	if !errResult.IsNil() {
+		return errResult.Interface().(error)
+	}
+
+	return nil
+}
+
+// InitializeResource instantiates a registered resource type, maps the provided configuration map,
+// starts the resource, and registers it in the active resources map under the given ID.
+func (p *Plugin) InitializeResource(ctx context.Context, id string, resourceTypeName string, config map[string]any) error {
+	resReg, ok := p.resources[resourceTypeName]
+	if !ok {
+		return fmt.Errorf("resource type %q not registered in namespace %s", resourceTypeName, p.Namespace)
+	}
+
+	// Instantiate the registered type via reflect.New
+	val := reflect.New(resReg.ResourceType)
+
+	// Map configuration map[string]any if provided
+	if config != nil {
+		configBytes, err := json.Marshal(config)
+		if err != nil {
+			return fmt.Errorf("failed to marshal configuration map for resource %q: %w", id, err)
+		}
+		if err := json.Unmarshal(configBytes, val.Interface()); err != nil {
+			return fmt.Errorf("failed to unmarshal configuration for resource %q: %w", id, err)
+		}
+	}
+
+	// Verify the instance implements the Resource interface
+	resInstance, ok := val.Interface().(Resource)
+	if !ok {
+		return fmt.Errorf("resource type %q does not implement Resource interface", resourceTypeName)
+	}
+
+	// Start the resource
+	if err := resInstance.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start resource %q: %w", id, err)
+	}
+
+	// Register in the active resources map
+	p.activeResourcesMu.Lock()
+	p.activeResources[id] = resInstance
+	p.activeResourcesMu.Unlock()
+
+	return nil
 }
 
 // bind maps Arrow Table columns to Go struct fields.
@@ -871,10 +990,11 @@ func extractMetadata(fnPtr uintptr) (doc string, code string, file string, line 
 // New creates a new Heddle Plugin instance within the specified namespace.
 func New(namespace string) *Plugin {
 	return &Plugin{
-		Namespace: namespace,
-		Language:  "go",
-		resources: make(map[string]ResourceRegistration),
-		steps:     make(map[string]StepRegistration),
-		Ready:     make(chan struct{}),
+		Namespace:       namespace,
+		Language:        "go",
+		resources:       make(map[string]resourceRegistration),
+		steps:           make(map[string]StepRegistration),
+		Ready:           make(chan struct{}),
+		activeResources: make(map[string]Resource),
 	}
 }

@@ -170,7 +170,7 @@ func TestDynamicSchemaExtraction(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	reg, ok := p.steps["dynamic_step"]
+	reg, ok := p.registry.GetStep("dynamic_step")
 	require.True(t, ok)
 
 	assert.True(t, reg.InputSchema.IsDynamic)

@@ -444,3 +444,54 @@ func toDatum(a any) (compute.Datum, error) {
 	}
 	return nil, fmt.Errorf("convert to datum error - input %T is not an arrow.Array", a)
 }
+
+// Interface satisfaction methods to decouple from internal execution package
+
+func (df *Int8) ArrowArray() arrow.Array   { return df.arrayInt8 }
+func (df *Int8) DirtyBits() []uint64      { return df.dirt }
+func (df *Int8) BindArrow(arr arrow.Array) { df.arrayInt8 = arr.(*array.Int8); df.dirt = []uint64{} }
+
+func (df *Int16) ArrowArray() arrow.Array   { return df.arrayInt16 }
+func (df *Int16) DirtyBits() []uint64      { return df.dirt }
+func (df *Int16) BindArrow(arr arrow.Array) { df.arrayInt16 = arr.(*array.Int16); df.dirt = []uint64{} }
+
+func (df *Int32) ArrowArray() arrow.Array   { return df.arrayInt32 }
+func (df *Int32) DirtyBits() []uint64      { return df.dirt }
+func (df *Int32) BindArrow(arr arrow.Array) { df.arrayInt32 = arr.(*array.Int32); df.dirt = []uint64{} }
+
+func (df *Int64) ArrowArray() arrow.Array   { return df.arrayInt64 }
+func (df *Int64) DirtyBits() []uint64      { return df.dirt }
+func (df *Int64) BindArrow(arr arrow.Array) { df.arrayInt64 = arr.(*array.Int64); df.dirt = []uint64{} }
+
+func (df *Uint8) ArrowArray() arrow.Array   { return df.arrayUint8 }
+func (df *Uint8) DirtyBits() []uint64      { return df.dirt }
+func (df *Uint8) BindArrow(arr arrow.Array) { df.arrayUint8 = arr.(*array.Uint8); df.dirt = []uint64{} }
+
+func (df *Uint16) ArrowArray() arrow.Array   { return df.arrayUint16 }
+func (df *Uint16) DirtyBits() []uint64      { return df.dirt }
+func (df *Uint16) BindArrow(arr arrow.Array) { df.arrayUint16 = arr.(*array.Uint16); df.dirt = []uint64{} }
+
+func (df *Uint32) ArrowArray() arrow.Array   { return df.arrayUint32 }
+func (df *Uint32) DirtyBits() []uint64      { return df.dirt }
+func (df *Uint32) BindArrow(arr arrow.Array) { df.arrayUint32 = arr.(*array.Uint32); df.dirt = []uint64{} }
+
+func (df *Uint64) ArrowArray() arrow.Array   { return df.arrayUint64 }
+func (df *Uint64) DirtyBits() []uint64      { return df.dirt }
+func (df *Uint64) BindArrow(arr arrow.Array) { df.arrayUint64 = arr.(*array.Uint64); df.dirt = []uint64{} }
+
+func (df *Float32) ArrowArray() arrow.Array   { return df.arrayFloat32 }
+func (df *Float32) DirtyBits() []uint64      { return df.dirt }
+func (df *Float32) BindArrow(arr arrow.Array) { df.arrayFloat32 = arr.(*array.Float32); df.dirt = []uint64{} }
+
+func (df *Float64) ArrowArray() arrow.Array   { return df.arrayFloat64 }
+func (df *Float64) DirtyBits() []uint64      { return df.dirt }
+func (df *Float64) BindArrow(arr arrow.Array) { df.arrayFloat64 = arr.(*array.Float64); df.dirt = []uint64{} }
+
+func (df *Bool) ArrowArray() arrow.Array   { return df.arrayBool }
+func (df *Bool) DirtyBits() []uint64      { return df.dirt }
+func (df *Bool) BindArrow(arr arrow.Array) { df.arrayBool = arr.(*array.Boolean); df.dirt = []uint64{} }
+
+func (df *String) ArrowArray() arrow.Array   { return df.arrayString }
+func (df *String) DirtyBits() []uint64      { return df.dirt }
+func (df *String) BindArrow(arr arrow.Array) { df.arrayString = arr.(*array.String); df.dirt = []uint64{} }
+

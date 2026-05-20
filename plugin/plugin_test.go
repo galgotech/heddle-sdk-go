@@ -27,13 +27,14 @@ type TestResource struct {
 }
 
 func (r *TestResource) Start(ctx context.Context) error { return nil }
+func (r *TestResource) Close() error                    { return nil }
 
 func TestRegisterResource(t *testing.T) {
 	p := New("test")
 	err := p.RegisterResource("test_res", TestResource{})
 	require.NoError(t, err)
 
-	reg, ok := p.resources["test_res"]
+	reg, ok := p.registry.GetResource("test_res")
 	require.True(t, ok)
 	assert.Equal(t, "test_res", reg.Name)
 	require.NotNil(t, reg.ResourceSchema)
@@ -51,7 +52,7 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 	// using the same logic as in plugin.go for verification.
 
 	resources := make(map[string]*schema.ResourceAndConfigSchema)
-	for name, res := range p.resources {
+	for name, res := range p.registry.AllResources() {
 		resources[name] = res.ResourceSchema
 	}
 
@@ -79,9 +80,7 @@ func TestInitializeResource(t *testing.T) {
 	config := map[string]any{"Host": "127.0.0.1", "Port": 8080}
 	err = p.InitializeResource(ctx, "my_active_res", "test_res", config)
 	require.NoError(t, err)
-	require.NotNil(t, p.activeResources["my_active_res"])
-
-	activeRes, ok := p.activeResources["my_active_res"]
+	activeRes, ok := p.resourceManager.Get("my_active_res")
 	require.True(t, ok)
 
 	testRes, ok := activeRes.(*TestResource)
@@ -108,7 +107,10 @@ func (s *mockFlightServer) DoExchange(stream flight.FlightService_DoExchangeServ
 }
 
 func TestPluginConnectRetry(t *testing.T) {
-	socketPath := runtime.WorkerUDSPath // Use the default for now as it's hardcoded
+	socketPath := runtime.WorkerUDSPath
+	if len(socketPath) > 7 && socketPath[:7] == "unix://" {
+		socketPath = socketPath[7:]
+	}
 	_ = os.Remove(socketPath)
 
 	p := New("test-namespace")
@@ -243,7 +245,7 @@ func TestRegisterStepMetadata(t *testing.T) {
 	err := p.RegisterStep("my_step", MyTestStep)
 	require.NoError(t, err)
 
-	reg, ok := p.steps["my_step"]
+	reg, ok := p.registry.GetStep("my_step")
 	require.True(t, ok)
 	assert.Equal(t, "MyDocComment is a test doc comment.\n", reg.Documentation)
 	assert.Contains(t, reg.SourceCode, "func MyTestStep")

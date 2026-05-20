@@ -10,6 +10,7 @@ import (
 // (e.g., database connection pool, API client) initialized by the Heddle runtime.
 type Resource interface {
 	Start(ctx context.Context) error
+	Close() error
 }
 
 // Config represents the configuration contract for a Heddle Step or Resource.

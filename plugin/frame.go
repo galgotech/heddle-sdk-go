@@ -425,3 +425,22 @@ func (h *HeddleFrame) exec(ctx context.Context, name string, output any, inputs 
 type VoidFrame struct {
 	HeddleFrame
 }
+
+type DynamicFrame struct {
+	HeddleFrame
+	Columns map[string]any
+}
+
+func (f *DynamicFrame) AddColumn(name string, data any) {
+	if f.Columns == nil {
+		f.Columns = make(map[string]any)
+	}
+	f.Columns[name] = data
+}
+
+func (f *DynamicFrame) GetColumn(name string) any {
+	if f.Columns == nil {
+		return nil
+	}
+	return f.Columns[name]
+}

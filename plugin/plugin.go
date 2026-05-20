@@ -179,10 +179,11 @@ func (p *Plugin) RegisterStep(name string, fn any) error {
 	inputFieldsIndex := []int{}
 	inType := inputType.Elem()
 	for i := 0; i < inType.NumField(); i++ {
-		if inType.Field(i).Type != reflect.TypeFor[HeddleFrame]() {
-			inputFieldsIndex = append(inputFieldsIndex, i)
-		} else {
+		f := inType.Field(i)
+		if f.Type == reflect.TypeFor[HeddleFrame]() || f.Type == reflect.TypeFor[DynamicFrame]() {
 			inputHeddleFrameIndex = i
+		} else if inType != reflect.TypeFor[DynamicFrame]() {
+			inputFieldsIndex = append(inputFieldsIndex, i)
 		}
 	}
 
@@ -190,10 +191,11 @@ func (p *Plugin) RegisterStep(name string, fn any) error {
 	outputFieldsIndex := []int{}
 	outType := outputType.Elem()
 	for i := 0; i < outType.NumField(); i++ {
-		if outType.Field(i).Type != reflect.TypeFor[HeddleFrame]() {
-			outputFieldsIndex = append(outputFieldsIndex, i)
-		} else {
+		f := outType.Field(i)
+		if f.Type == reflect.TypeFor[HeddleFrame]() || f.Type == reflect.TypeFor[DynamicFrame]() {
 			outputHeddleFrameIndex = i
+		} else if outType != reflect.TypeFor[DynamicFrame]() {
+			outputFieldsIndex = append(outputFieldsIndex, i)
 		}
 	}
 
@@ -438,14 +440,14 @@ func (p *Plugin) startExecutionLoop(ctx context.Context, client flight.Client) e
 // executeTask handles the end-to-end execution of a single Heddle Step.
 // It performs Zero-Copy data loading from SHM, reflection-based binding to Go structs,
 // function invocation, and result serialization back to SHM.
-func (p *Plugin) executeTask(ctx context.Context, req baseplugin.ExecuteStepRequest) baseplugin.ExecuteStepResponse {
+func (p *Plugin) executeTask(ctx context.Context, request baseplugin.ExecuteStepRequest) baseplugin.ExecuteStepResponse {
 	// 1. Resolve the requested step in this plugin's namespace.
-	targetStep, ok := p.steps[req.StepName]
+	targetStep, ok := p.steps[request.StepName]
 	if !ok {
 		return baseplugin.ExecuteStepResponse{
-			TaskID:       req.TaskID,
+			TaskID:       request.TaskID,
 			Status:       baseplugin.StepResponseError,
-			ErrorMessage: fmt.Sprintf("step %s not found", req.StepName),
+			ErrorMessage: fmt.Sprintf("step %s not found", request.StepName),
 		}
 	}
 
@@ -453,26 +455,39 @@ func (p *Plugin) executeTask(ctx context.Context, req baseplugin.ExecuteStepRequ
 	configType := targetStep.ConfigType
 	if configType.Kind() == reflect.Pointer {
 		return baseplugin.ExecuteStepResponse{
-			TaskID:       req.TaskID,
+			TaskID:       request.TaskID,
 			Status:       baseplugin.StepResponseError,
 			ErrorMessage: "step config must be a struct",
 		}
 	}
 
 	configVal := reflect.New(configType)
-	if req.ConfigJSON != "" {
-		if err := json.Unmarshal([]byte(req.ConfigJSON), configVal.Interface()); err != nil {
+	if request.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(request.ConfigJSON), configVal.Interface()); err != nil {
 			return baseplugin.ExecuteStepResponse{
-				TaskID:       req.TaskID,
+				TaskID:       request.TaskID,
 				Status:       baseplugin.StepResponseError,
 				ErrorMessage: fmt.Errorf("failed to unmarshal config: %w", err).Error(),
 			}
 		}
 	}
 
+	// 2.1 Inject resource if provided
+	if request.ResourceId != "" {
+		if resReg, ok := p.resources[request.ResourceId]; ok {
+			v := configVal.Elem()
+			for i := 0; i < v.NumField(); i++ {
+				if v.Field(i).Type() == reflect.TypeFor[Config]() {
+					v.Field(i).Addr().Interface().(*Config).SetResource(resReg.Resource)
+					break
+				}
+			}
+		}
+	}
+
 	// 3. Prepare the Input Frame using Zero-Copy SHM access.
 	columns := make(map[string]arrow.Array)
-	for fieldName, path := range req.InputHandles {
+	for fieldName, path := range request.InputHandles {
 		arr, err := locality.ReadArrowArrayFromPath(path)
 		if err != nil {
 			logger.L().Error("Failed to read input from SHM", zap.Error(err), zap.String("path", path))
@@ -484,11 +499,19 @@ func (p *Plugin) executeTask(ctx context.Context, req baseplugin.ExecuteStepRequ
 
 	inputVal, outputVal := targetStep.NewInputOutput()
 	if len(columns) > 0 {
-		if err := bind(inputVal, targetStep.inputFieldsIndex, columns); err != nil {
-			return baseplugin.ExecuteStepResponse{
-				TaskID:       req.TaskID,
-				Status:       baseplugin.StepResponseError,
-				ErrorMessage: fmt.Sprintf("failed to bind input frame: %v", err),
+		if targetStep.InputType == reflect.TypeFor[*DynamicFrame]() {
+			df := inputVal.Interface().(*DynamicFrame)
+			df.Columns = make(map[string]any)
+			for name, arr := range columns {
+				df.Columns[name] = arr
+			}
+		} else {
+			if err := bind(inputVal, targetStep.inputFieldsIndex, columns); err != nil {
+				return baseplugin.ExecuteStepResponse{
+					TaskID:       request.TaskID,
+					Status:       baseplugin.StepResponseError,
+					ErrorMessage: fmt.Sprintf("failed to bind input frame: %v", err),
+				}
 			}
 		}
 	}
@@ -504,7 +527,7 @@ func (p *Plugin) executeTask(ctx context.Context, req baseplugin.ExecuteStepRequ
 	errResult := results[0]
 	if !errResult.IsNil() {
 		return baseplugin.ExecuteStepResponse{
-			TaskID:       req.TaskID,
+			TaskID:       request.TaskID,
 			Status:       baseplugin.StepResponseError,
 			ErrorMessage: errResult.Interface().(error).Error(),
 		}
@@ -513,7 +536,7 @@ func (p *Plugin) executeTask(ctx context.Context, req baseplugin.ExecuteStepRequ
 	// Check if the output is a VoidFrame (explicitly no-data).
 	if targetStep.OutputType == reflect.TypeFor[VoidFrame]() {
 		return baseplugin.ExecuteStepResponse{
-			TaskID: req.TaskID,
+			TaskID: request.TaskID,
 			Status: baseplugin.StepResponseSuccess,
 		}
 	}
@@ -521,109 +544,189 @@ func (p *Plugin) executeTask(ctx context.Context, req baseplugin.ExecuteStepRequ
 	outputHandles := make(map[string]string)
 	dirtyHandles := make(map[string]string)
 
-	vVal := outputVal.Elem()
-	t := vVal.Type()
+	if targetStep.OutputType == reflect.TypeFor[*DynamicFrame]() {
+		df := outputVal.Interface().(*DynamicFrame)
+		for name, colData := range df.Columns {
+			var arr arrow.Array
+			var dirt []uint64
 
-	for _, i := range targetStep.outputFieldsIndex {
-		fValue := vVal.Field(i)
-		fieldPtr := fValue.Interface()
-		name := t.Field(i).Name
+			switch d := colData.(type) {
+			case *Int8: arr = d.arrayInt8; dirt = d.dirt
+			case *Int16: arr = d.arrayInt16; dirt = d.dirt
+			case *Int32: arr = d.arrayInt32; dirt = d.dirt
+			case *Int64: arr = d.arrayInt64; dirt = d.dirt
+			case *Uint8: arr = d.arrayUint8; dirt = d.dirt
+			case *Uint16: arr = d.arrayUint16; dirt = d.dirt
+			case *Uint32: arr = d.arrayUint32; dirt = d.dirt
+			case *Uint64: arr = d.arrayUint64; dirt = d.dirt
+			case *Float32: arr = d.arrayFloat32; dirt = d.dirt
+			case *Float64: arr = d.arrayFloat64; dirt = d.dirt
+			case *Bool: arr = d.arrayBool; dirt = d.dirt
+			case *String: arr = d.arrayString; dirt = d.dirt
+			case arrow.Array: arr = d
+			default:
+				return baseplugin.ExecuteStepResponse{
+					TaskID:       request.TaskID,
+					Status:       baseplugin.StepResponseError,
+					ErrorMessage: fmt.Sprintf("unsupported dynamic output field type %T", colData),
+				}
+			}
 
-		var arr arrow.Array
-		var dirt []uint64
+			if arr != nil && !reflect.ValueOf(arr).IsNil() {
+				path, err := locality.WriteArrowArrayOnlyToShm(arr)
+				if err != nil {
+					return baseplugin.ExecuteStepResponse{
+						TaskID:       request.TaskID,
+						Status:       baseplugin.StepResponseError,
+						ErrorMessage: fmt.Sprintf("failed to write dynamic output frame: %v", err),
+					}
+				}
+				outputHandles[name] = path
 
-		switch dataFrame := fieldPtr.(type) {
-		case *Int8:
-			arr = dataFrame.arrayInt8
-			dirt = dataFrame.dirt
-		case *Int16:
-			arr = dataFrame.arrayInt16
-			dirt = dataFrame.dirt
-		case *Int32:
-			arr = dataFrame.arrayInt32
-			dirt = dataFrame.dirt
-		case *Int64:
-			arr = dataFrame.arrayInt64
-			dirt = dataFrame.dirt
-		case *Uint8:
-			arr = dataFrame.arrayUint8
-			dirt = dataFrame.dirt
-		case *Uint16:
-			arr = dataFrame.arrayUint16
-			dirt = dataFrame.dirt
-		case *Uint32:
-			arr = dataFrame.arrayUint32
-			dirt = dataFrame.dirt
-		case *Uint64:
-			arr = dataFrame.arrayUint64
-			dirt = dataFrame.dirt
-		case *Float32:
-			arr = dataFrame.arrayFloat32
-			dirt = dataFrame.dirt
-		case *Float64:
-			arr = dataFrame.arrayFloat64
-			dirt = dataFrame.dirt
-		case *Bool:
-			arr = dataFrame.arrayBool
-			dirt = dataFrame.dirt
-		case *String:
-			arr = dataFrame.arrayString
-			dirt = dataFrame.dirt
-		default:
-			logger.L().Error("unsupported output field type", zap.String("type", fValue.Type().String()))
-			return baseplugin.ExecuteStepResponse{
-				TaskID:       req.TaskID,
-				Status:       baseplugin.StepResponseError,
-				ErrorMessage: fmt.Sprintf("unsupported output field type %s", fValue.Type()),
+				if dirt != nil {
+					hasDirty := false
+					for _, b := range dirt {
+						if b != 0 {
+							hasDirty = true
+							break
+						}
+					}
+					if hasDirty {
+						dp, err := locality.WriteDirtyToShm(dirt)
+						if err != nil {
+							logger.L().Error("Failed to write dirty bits to SHM", zap.Error(err))
+						} else {
+							dirtyHandles[name] = dp
+						}
+					}
+				}
 			}
 		}
+	} else {
+		vVal := outputVal.Elem()
+		t := vVal.Type()
 
-		if arr != nil && !reflect.ValueOf(arr).IsNil() {
-			path, err := locality.WriteArrowArrayOnlyToShm(arr)
-			if err != nil {
+		for _, i := range targetStep.outputFieldsIndex {
+			fValue := vVal.Field(i)
+			fieldPtr := fValue.Interface()
+			name := t.Field(i).Name
+
+			var arr arrow.Array
+			var dirt []uint64
+
+			switch dataFrame := fieldPtr.(type) {
+			case *Int8:
+				arr = dataFrame.arrayInt8
+				dirt = dataFrame.dirt
+			case *Int16:
+				arr = dataFrame.arrayInt16
+				dirt = dataFrame.dirt
+			case *Int32:
+				arr = dataFrame.arrayInt32
+				dirt = dataFrame.dirt
+			case *Int64:
+				arr = dataFrame.arrayInt64
+				dirt = dataFrame.dirt
+			case *Uint8:
+				arr = dataFrame.arrayUint8
+				dirt = dataFrame.dirt
+			case *Uint16:
+				arr = dataFrame.arrayUint16
+				dirt = dataFrame.dirt
+			case *Uint32:
+				arr = dataFrame.arrayUint32
+				dirt = dataFrame.dirt
+			case *Uint64:
+				arr = dataFrame.arrayUint64
+				dirt = dataFrame.dirt
+			case *Float32:
+				arr = dataFrame.arrayFloat32
+				dirt = dataFrame.dirt
+			case *Float64:
+				arr = dataFrame.arrayFloat64
+				dirt = dataFrame.dirt
+			case *Bool:
+				arr = dataFrame.arrayBool
+				dirt = dataFrame.dirt
+			case *String:
+				arr = dataFrame.arrayString
+				dirt = dataFrame.dirt
+			default:
+				logger.L().Error("unsupported output field type", zap.String("type", fValue.Type().String()))
 				return baseplugin.ExecuteStepResponse{
-					TaskID:       req.TaskID,
+					TaskID:       request.TaskID,
 					Status:       baseplugin.StepResponseError,
-					ErrorMessage: fmt.Sprintf("failed to write output frame: %v", err),
+					ErrorMessage: fmt.Sprintf("unsupported output field type %s", fValue.Type()),
 				}
-			} else {
-				outputHandles[name] = path
 			}
 
-			hasDirty := false
-			for _, d := range dirt {
-				if d != 0 {
-					hasDirty = true
-					break
-				}
-			}
-			if hasDirty {
-				dp, err := locality.WriteDirtyToShm(dirt)
+			if arr != nil && !reflect.ValueOf(arr).IsNil() {
+				path, err := locality.WriteArrowArrayOnlyToShm(arr)
 				if err != nil {
-					logger.L().Error("Failed to write dirty bits to SHM", zap.Error(err))
+					return baseplugin.ExecuteStepResponse{
+						TaskID:       request.TaskID,
+						Status:       baseplugin.StepResponseError,
+						ErrorMessage: fmt.Sprintf("failed to write output frame: %v", err),
+					}
 				} else {
-					dirtyHandles[name] = dp
+					outputHandles[name] = path
+				}
+
+				hasDirty := false
+				for _, d := range dirt {
+					if d != 0 {
+						hasDirty = true
+						break
+					}
+				}
+				if hasDirty {
+					dp, err := locality.WriteDirtyToShm(dirt)
+					if err != nil {
+						logger.L().Error("Failed to write dirty bits to SHM", zap.Error(err))
+					} else {
+						dirtyHandles[name] = dp
+					}
 				}
 			}
 		}
 	}
 
 	return baseplugin.ExecuteStepResponse{
-		TaskID:        req.TaskID,
+		TaskID:        request.TaskID,
 		Status:        baseplugin.StepResponseSuccess,
 		OutputHandles: outputHandles,
 		DirtyHandles:  dirtyHandles,
 	}
 }
 
-// New creates a new Heddle Plugin instance within the specified namespace.
-func New(namespace string) *Plugin {
-	return &Plugin{
-		Namespace: namespace,
-		Language:  "go",
-		resources: make(map[string]ResourceRegistration),
-		steps:     make(map[string]StepRegistration),
-		Ready:     make(chan struct{}),
+// ResolveSchema handles a request to resolve dynamic schemas for a specific step and configuration.
+func (p *Plugin) ResolveSchema(req baseplugin.ResolveSchemaRequest) baseplugin.ResolveSchemaResponse {
+	targetStep, ok := p.steps[req.StepName]
+	if !ok {
+		return baseplugin.ResolveSchemaResponse{Error: fmt.Sprintf("step %s not found", req.StepName)}
+	}
+
+	configVal := reflect.New(targetStep.ConfigType)
+	if req.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(req.ConfigJSON), configVal.Interface()); err != nil {
+			return baseplugin.ResolveSchemaResponse{Error: fmt.Sprintf("failed to unmarshal config: %v", err)}
+		}
+	}
+
+	if resolver, ok := configVal.Interface().(TypeResolver); ok {
+		input, output, err := resolver.ResolveTypes()
+		if err != nil {
+			return baseplugin.ResolveSchemaResponse{Error: fmt.Sprintf("failed to resolve types: %v", err)}
+		}
+		return baseplugin.ResolveSchemaResponse{
+			Input:  input,
+			Output: output,
+		}
+	}
+
+	return baseplugin.ResolveSchemaResponse{
+		Input:  targetStep.InputSchema,
+		Output: targetStep.OutputSchema,
 	}
 }
 
@@ -763,4 +866,15 @@ func extractMetadata(fnPtr uintptr) (doc string, code string, file string, line 
 		}
 	}
 	return
+}
+
+// New creates a new Heddle Plugin instance within the specified namespace.
+func New(namespace string) *Plugin {
+	return &Plugin{
+		Namespace: namespace,
+		Language:  "go",
+		resources: make(map[string]ResourceRegistration),
+		steps:     make(map[string]StepRegistration),
+		Ready:     make(chan struct{}),
+	}
 }

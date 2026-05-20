@@ -68,6 +68,10 @@ func ExtractInputOutputSchema(t reflect.Type) (*schema.FrameSchema, error) {
 		return &schema.FrameSchema{IsVoid: true}, nil
 	}
 
+	if t == reflect.TypeFor[DynamicFrame]() {
+		return &schema.FrameSchema{IsDynamic: true}, nil
+	}
+
 	// Verify it embeds HeddleFrame
 	hasFrame := false
 	for field := range t.Fields() {

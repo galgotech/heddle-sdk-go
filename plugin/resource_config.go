@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"context"
+
+	"github.com/galgotech/heddle-lang/pkg/schema"
 )
 
 // Resource represents an external dependency or stateful object
@@ -22,4 +24,14 @@ func (c *Config) HasResource() bool {
 
 func (c *Config) GetResource() Resource {
 	return c.resource
+}
+
+func (c *Config) SetResource(r Resource) {
+	c.resource = r
+}
+
+// TypeResolver is an optional interface that configurations can implement
+// to provide dynamic input and output schemas based on their values.
+type TypeResolver interface {
+	ResolveTypes() (input *schema.FrameSchema, output *schema.FrameSchema, err error)
 }

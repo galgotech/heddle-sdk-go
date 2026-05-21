@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
-	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 	"github.com/galgotech/heddle-sdk-go/internal/resourcelink"
+	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
 type TestResource struct {
@@ -60,7 +60,7 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 	}
 
 	reg := baseplugin.PluginRegistration{
-		Namespace: p.Namespace,
+		Namespace: p.namespace,
 		Resources: resources,
 	}
 

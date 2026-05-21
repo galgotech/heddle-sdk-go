@@ -7,8 +7,8 @@ import (
 )
 
 type Plugin struct {
-	Namespace string
-	Language  string
+	namespace string
+	language  string
 	Ready     chan struct{}
 
 	registry      internal.Registry
@@ -40,8 +40,8 @@ func New(ctx context.Context, namespace string) *Plugin {
 	networkClient := internal.NewNetworkClient(namespace, language, ready, registry, executor)
 
 	p := &Plugin{
-		Namespace:     namespace,
-		Language:      language,
+		namespace:     namespace,
+		language:      language,
 		Ready:         ready,
 		registry:      registry,
 		networkClient: networkClient,

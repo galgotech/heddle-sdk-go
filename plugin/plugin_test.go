@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"reflect"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/flight"
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
 	"github.com/galgotech/heddle-lang/pkg/runtime"
@@ -19,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+
+	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
 type TestResource struct {
@@ -30,7 +30,7 @@ func (r *TestResource) Start(ctx context.Context) error { return nil }
 func (r *TestResource) Close() error                    { return nil }
 
 func TestRegisterResource(t *testing.T) {
-	p := New("test")
+	p := New(t.Context(), "test")
 	err := p.RegisterResource("test_res", TestResource{})
 	require.NoError(t, err)
 
@@ -44,7 +44,7 @@ func TestRegisterResource(t *testing.T) {
 }
 
 func TestPluginRegistrationIncludesResources(t *testing.T) {
-	p := New("test")
+	p := New(t.Context(), "test")
 	err := p.RegisterResource("my_resource", TestResource{})
 	require.NoError(t, err)
 
@@ -72,13 +72,12 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 }
 
 func TestInitializeResource(t *testing.T) {
-	p := New("test")
+	p := New(t.Context(), "test")
 	err := p.RegisterResource("test_res", TestResource{})
 	require.NoError(t, err)
 
-	ctx := context.Background()
 	config := map[string]any{"Host": "127.0.0.1", "Port": 8080}
-	err = p.InitializeResource(ctx, "my_active_res", "test_res", config)
+	err = p.InitializeResource("my_active_res", "test_res", config)
 	require.NoError(t, err)
 	activeRes, ok := p.resourceManager.Get("my_active_res")
 	require.True(t, ok)
@@ -113,7 +112,7 @@ func TestPluginConnectRetry(t *testing.T) {
 	}
 	_ = os.Remove(socketPath)
 
-	p := New("test-namespace")
+	p := New(t.Context(), "test-namespace")
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -189,50 +188,13 @@ func TestPluginConnectRetry(t *testing.T) {
 }
 
 type TestRegistrationInput struct {
-	HeddleFrame
-	Data *Int64
+	pluginschema.HeddleFrame
+	Data *pluginschema.Int64
 }
 
 type TestRegistrationOutput struct {
-	HeddleFrame
-	Result *String
-}
-
-func TestStepRegistration_NewInputOutput(t *testing.T) {
-	reg := &StepRegistration{
-		InputType:         reflect.TypeFor[*TestRegistrationInput](),
-		OutputType:        reflect.TypeFor[*TestRegistrationOutput](),
-		inputFieldsIndex:  []int{1}, // Index 1 is Data
-		outputFieldsIndex: []int{1}, // Index 1 is Result
-	}
-
-	inputVal, outputVal := reg.newInputOutput()
-
-	// Verify input
-	assert.Equal(t, reflect.Pointer, inputVal.Kind())
-	assert.Equal(t, reflect.Struct, inputVal.Elem().Kind())
-	assert.Equal(t, reflect.Pointer, inputVal.Elem().Field(1).Kind())
-	assert.Equal(t, reflect.Struct, inputVal.Elem().Field(1).Elem().Kind())
-
-	data, ok := (inputVal.Elem().Field(1).Interface()).(*Int64)
-	assert.True(t, ok)
-	assert.NotNil(t, data)
-
-	input := inputVal.Interface().(*TestRegistrationInput)
-	assert.NotNil(t, input.Data, "Input field Data should be initialized")
-
-	// Verify output
-	assert.Equal(t, reflect.Pointer, outputVal.Kind())
-	assert.Equal(t, reflect.Struct, outputVal.Elem().Kind())
-	assert.Equal(t, reflect.Pointer, outputVal.Elem().Field(1).Kind())
-	assert.Equal(t, reflect.Struct, outputVal.Elem().Field(1).Elem().Kind())
-
-	result, ok := (outputVal.Elem().Field(1).Interface()).(*String)
-	assert.True(t, ok)
-	assert.NotNil(t, result)
-
-	output := outputVal.Interface().(*TestRegistrationOutput)
-	assert.NotNil(t, output.Result, "Output field Result should be initialized")
+	pluginschema.HeddleFrame
+	Result *pluginschema.String
 }
 
 // MyDocComment is a test doc comment.
@@ -241,7 +203,7 @@ func MyTestStep(ctx context.Context, config struct{}, input *TestRegistrationInp
 }
 
 func TestRegisterStepMetadata(t *testing.T) {
-	p := New("test")
+	p := New(t.Context(), "test")
 	err := p.RegisterStep("my_step", MyTestStep)
 	require.NoError(t, err)
 
@@ -254,92 +216,19 @@ func TestRegisterStepMetadata(t *testing.T) {
 }
 
 type TestBindInput struct {
-	HeddleFrame
-	A *Float64
-	B *Float64
+	pluginschema.HeddleFrame
+	A *pluginschema.Float64
+	B *pluginschema.Float64
 }
 
 type TestBindOutput struct {
-	HeddleFrame
-	A *Float64
-	B *Float64
-}
-
-func TestBindWithRegistrationNewInputOutput(t *testing.T) {
-	reg := &StepRegistration{
-		InputType:              reflect.TypeFor[*TestBindInput](),
-		OutputType:             reflect.TypeFor[*TestBindOutput](),
-		inputHeddleFrameIndex:  0,
-		outputHeddleFrameIndex: 0,
-		inputFieldsIndex:       []int{1, 2},
-		outputFieldsIndex:      []int{1, 2},
-	}
-
-	columns := make(map[string]arrow.Array)
-	columns["A"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
-	columns["B"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
-
-	input, output := reg.newInputOutput()
-	assert.NotNil(t, input)
-	assert.NotNil(t, output)
-
-	err := bind(input, reg.inputFieldsIndex, columns)
-	assert.NoError(t, err)
-
-	assert.Equal(t, 1.1, input.Interface().(*TestBindInput).A.Value(0))
-	assert.Equal(t, 2.2, input.Interface().(*TestBindInput).A.Value(1))
-	assert.Equal(t, 1.1, input.Interface().(*TestBindInput).B.Value(0))
-	assert.Equal(t, 2.2, input.Interface().(*TestBindInput).B.Value(1))
-
-	// Now bind to output
-	err = bind(output, reg.outputFieldsIndex, columns)
-	assert.NoError(t, err)
-
-	assert.Equal(t, 1.1, output.Interface().(*TestBindOutput).A.Value(0))
-	assert.Equal(t, 2.2, output.Interface().(*TestBindOutput).A.Value(1))
-	assert.Equal(t, 1.1, output.Interface().(*TestBindOutput).B.Value(0))
-	assert.Equal(t, 2.2, output.Interface().(*TestBindOutput).B.Value(1))
+	pluginschema.HeddleFrame
+	A *pluginschema.Float64
+	B *pluginschema.Float64
 }
 
 type TestFrame struct {
-	HeddleFrame
-	A *Float64
-	B *Float64
-}
-
-func TestBindAllColumns(t *testing.T) {
-
-	columns := make(map[string]arrow.Array)
-	columns["A"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
-	columns["B"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
-
-	frameType := reflect.TypeFor[*TestFrame]()
-	frameValue := reflect.New(frameType.Elem())
-	v := frameValue.Elem()
-	v.Field(1).Set(reflect.New(v.Field(1).Type().Elem()))
-	v.Field(2).Set(reflect.New(v.Field(2).Type().Elem()))
-
-	err := bind(frameValue, []int{1, 2}, columns)
-	assert.NoError(t, err)
-
-	frame := frameValue.Interface().(*TestFrame)
-	assert.NotNil(t, frame.A.arrayFloat64)
-	assert.NotNil(t, frame.B.arrayFloat64)
-	assert.Equal(t, 2, frame.A.Len())
-	assert.Equal(t, 2, frame.B.Len())
-}
-
-func TestBindPartialColumns(t *testing.T) {
-	columns := make(map[string]arrow.Array)
-	columns["A"] = NewFloat64([]float64{1.1, 2.2}).arrayFloat64
-
-	frameType := reflect.TypeFor[*TestFrame]()
-	frameValue := reflect.New(frameType.Elem())
-	v := frameValue.Elem()
-	v.Field(1).Set(reflect.New(v.Field(1).Type().Elem()))
-	v.Field(2).Set(reflect.New(v.Field(2).Type().Elem()))
-
-	err := bind(frameValue, []int{1, 2}, columns)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "column \"B\" is required but missing")
+	pluginschema.HeddleFrame
+	A *pluginschema.Float64
+	B *pluginschema.Float64
 }

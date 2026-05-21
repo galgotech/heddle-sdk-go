@@ -1,4 +1,4 @@
-package plugin
+package internal
 
 import (
 	"fmt"
@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/galgotech/heddle-lang/pkg/schema"
+
+	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
 // extractResourceAndConfigSchema performs type introspection to derive a basic JSON schema for Step/Resource configurations.
@@ -22,7 +24,7 @@ func extractResourceAndConfigSchema(t reflect.Type) (*schema.ResourceAndConfigSc
 	}
 
 	for field := range t.Fields() {
-		if field.Type == reflect.TypeFor[Config]() {
+		if field.Type == reflect.TypeFor[pluginschema.Config]() {
 			continue
 		}
 		jsonTag := field.Tag.Get("json")
@@ -64,11 +66,11 @@ func extractInputOutputSchema(t reflect.Type) (*schema.FrameSchema, error) {
 		return nil, fmt.Errorf("ExtractSchema: expected struct embedding HeddleFrame, got %s", t.Kind())
 	}
 
-	if t == reflect.TypeFor[VoidFrame]() {
+	if t == reflect.TypeFor[pluginschema.VoidFrame]() {
 		return &schema.FrameSchema{IsVoid: true}, nil
 	}
 
-	if t == reflect.TypeFor[DynamicFrame]() {
+	if t == reflect.TypeFor[pluginschema.DynamicFrame]() {
 		return &schema.FrameSchema{IsDynamic: true}, nil
 	}
 
@@ -95,29 +97,29 @@ func extractInputOutputSchema(t reflect.Type) (*schema.FrameSchema, error) {
 
 		var arrowType string
 		switch fieldType {
-		case reflect.TypeFor[Int8]():
+		case reflect.TypeFor[pluginschema.Int8]():
 			arrowType = "int8"
-		case reflect.TypeFor[Int16]():
+		case reflect.TypeFor[pluginschema.Int16]():
 			arrowType = "int16"
-		case reflect.TypeFor[Int32]():
+		case reflect.TypeFor[pluginschema.Int32]():
 			arrowType = "int32"
-		case reflect.TypeFor[Int64]():
+		case reflect.TypeFor[pluginschema.Int64]():
 			arrowType = "int64"
-		case reflect.TypeFor[Uint8]():
+		case reflect.TypeFor[pluginschema.Uint8]():
 			arrowType = "uint8"
-		case reflect.TypeFor[Uint16]():
+		case reflect.TypeFor[pluginschema.Uint16]():
 			arrowType = "uint16"
-		case reflect.TypeFor[Uint32]():
+		case reflect.TypeFor[pluginschema.Uint32]():
 			arrowType = "uint32"
-		case reflect.TypeFor[Uint64]():
+		case reflect.TypeFor[pluginschema.Uint64]():
 			arrowType = "uint64"
-		case reflect.TypeFor[Float32]():
+		case reflect.TypeFor[pluginschema.Float32]():
 			arrowType = "float32"
-		case reflect.TypeFor[Float64]():
+		case reflect.TypeFor[pluginschema.Float64]():
 			arrowType = "float64"
-		case reflect.TypeFor[Bool]():
+		case reflect.TypeFor[pluginschema.Bool]():
 			arrowType = "bool"
-		case reflect.TypeFor[String]():
+		case reflect.TypeFor[pluginschema.String]():
 			arrowType = "utf8"
 		default:
 			continue
@@ -140,11 +142,11 @@ func embedsHeddleFrame(t reflect.Type) bool {
 	if t.Kind() != reflect.Struct {
 		return false
 	}
-	if t == reflect.TypeFor[HeddleFrame]() {
+	if t == reflect.TypeFor[pluginschema.HeddleFrame]() {
 		return true
 	}
 	for field := range t.Fields() {
-		if field.Type == reflect.TypeFor[HeddleFrame]() {
+		if field.Type == reflect.TypeFor[pluginschema.HeddleFrame]() {
 			return true
 		}
 		if field.Anonymous && embedsHeddleFrame(field.Type) {

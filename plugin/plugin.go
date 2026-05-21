@@ -2,12 +2,10 @@ package plugin
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"reflect"
 	"time"
 
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
+	"github.com/galgotech/heddle-sdk-go/internal"
 )
 
 type Plugin struct {
@@ -15,10 +13,16 @@ type Plugin struct {
 	Language  string
 	Ready     chan struct{}
 
-	registry        Registry
-	executor        Executor
-	networkClient   NetworkClient
-	resourceManager *ResourceManager
+	registry        internal.Registry
+	executor        internal.Executor
+	networkClient   internal.NetworkClient
+	resourceManager *internal.ResourceManager
+}
+
+// InitializeResource instantiates a registered resource type, maps the provided configuration map,
+// starts the resource, and registers it in the active resources map under the given ID.
+func (p *Plugin) InitializeResource(id string, resourceTypeName string, config map[string]any) error {
+	return p.resourceManager.InitializeResource(id, resourceTypeName, config)
 }
 
 // RegisterResource adds a new resource type to the plugin's internal registry.
@@ -48,61 +52,25 @@ func (p *Plugin) ExecuteStepDirectly(ctx context.Context, stepName string, confi
 	return p.executor.ExecuteStepDirectly(ctx, stepName, configJSON, resourceId, input, output)
 }
 
-// InitializeResource instantiates a registered resource type, maps the provided configuration map,
-// starts the resource, and registers it in the active resources map under the given ID.
-func (p *Plugin) InitializeResource(ctx context.Context, id string, resourceTypeName string, config map[string]any) error {
-	resReg, ok := p.registry.GetResource(resourceTypeName)
-	if !ok {
-		return fmt.Errorf("resource type %q not registered in namespace %s", resourceTypeName, p.Namespace)
-	}
-
-	// Instantiate the registered type via reflect.New
-	val := reflect.New(resReg.ResourceType)
-
-	// Map configuration map[string]any if provided
-	if config != nil {
-		configBytes, err := json.Marshal(config)
-		if err != nil {
-			return fmt.Errorf("failed to marshal configuration map for resource %q: %w", id, err)
-		}
-		if err := json.Unmarshal(configBytes, val.Interface()); err != nil {
-			return fmt.Errorf("failed to unmarshal configuration for resource %q: %w", id, err)
-		}
-	}
-
-	// Verify the instance implements the Resource interface
-	resInstance, ok := val.Interface().(Resource)
-	if !ok {
-		return fmt.Errorf("resource type %q does not implement Resource interface", resourceTypeName)
-	}
-
-	// Start the resource
-	if err := resInstance.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start resource %q: %w", id, err)
-	}
-
-	// Register in the active resources map via ResourceManager
-	p.resourceManager.Set(id, resInstance)
-
-	return nil
-}
-
 // New creates a new Heddle Plugin instance within the specified namespace.
-func New(namespace string) *Plugin {
+func New(ctx context.Context, namespace string) *Plugin {
 	ready := make(chan struct{})
-	rm := NewResourceManager(15 * time.Minute)
-	reg := newRegistry(namespace)
+	language := "go"
+
+	registry := internal.NewRegistry(namespace)
+	resourceManager := internal.NewResourceManager(ctx, registry, 15*time.Minute)
+	executor := internal.NewExecutor(registry, resourceManager)
+	networkClient := internal.NewNetworkClient(namespace, language, ready, registry, executor, resourceManager)
 
 	p := &Plugin{
 		Namespace:       namespace,
-		Language:        "go",
+		Language:        language,
 		Ready:           ready,
-		registry:        reg,
-		resourceManager: rm,
+		registry:        registry,
+		resourceManager: resourceManager,
+		networkClient:   networkClient,
+		executor:        executor,
 	}
-
-	p.executor = NewExecutor(reg, rm, p.InitializeResource)
-	p.networkClient = NewNetworkClient(namespace, "go", ready, reg, p.executor, rm)
 
 	return p
 }

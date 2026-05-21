@@ -1,4 +1,4 @@
-package plugin
+package internal
 
 import (
 	"reflect"
@@ -6,13 +6,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
 type SchemaTable struct {
-	HeddleFrame
-	ID     *Int64
-	Email  *String
-	Active *Bool
+	pluginschema.HeddleFrame
+	ID     *pluginschema.Int64
+	Email  *pluginschema.String
+	Active *pluginschema.Bool
 }
 
 func TestExtractSchema(t *testing.T) {
@@ -39,7 +41,7 @@ func TestExtractSchema(t *testing.T) {
 
 func TestExtractConfigSchema(t *testing.T) {
 	type ConfigTest struct {
-		Config
+		pluginschema.Config
 		Name    string `json:"name"`
 		Timeout int    `json:"timeout"`
 		Hidden  string `json:"-"`

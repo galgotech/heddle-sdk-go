@@ -1,4 +1,4 @@
-package plugin
+package internal
 
 import (
 	"context"
@@ -21,6 +21,10 @@ import (
 	"github.com/galgotech/heddle-lang/pkg/schema"
 )
 
+type NetworkClient interface {
+	Start(ctx context.Context) error
+}
+
 type flightNetworkClient struct {
 	namespace       string
 	language        string
@@ -28,24 +32,6 @@ type flightNetworkClient struct {
 	registry        Registry
 	executor        Executor
 	resourceManager *ResourceManager
-}
-
-func NewNetworkClient(
-	namespace string,
-	language string,
-	ready chan struct{},
-	reg Registry,
-	exec Executor,
-	rm *ResourceManager,
-) NetworkClient {
-	return &flightNetworkClient{
-		namespace:       namespace,
-		language:        language,
-		ready:           ready,
-		registry:        reg,
-		executor:        exec,
-		resourceManager: rm,
-	}
 }
 
 // Start initializes the plugin's lifecycle, establishing a resilient connection to the Worker.
@@ -263,5 +249,23 @@ func (nc *flightNetworkClient) startExecutionLoop(ctx context.Context, client fl
 				logger.L().Error("Failed to send response", zap.Error(err))
 			}
 		}(req)
+	}
+}
+
+func NewNetworkClient(
+	namespace string,
+	language string,
+	ready chan struct{},
+	reg Registry,
+	exec Executor,
+	rm *ResourceManager,
+) NetworkClient {
+	return &flightNetworkClient{
+		namespace:       namespace,
+		language:        language,
+		ready:           ready,
+		registry:        reg,
+		executor:        exec,
+		resourceManager: rm,
 	}
 }

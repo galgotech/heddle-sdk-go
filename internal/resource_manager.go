@@ -2,17 +2,17 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
 	"sync"
 	"time"
+
+	"github.com/galgotech/heddle-sdk-go/schema"
 )
 
-type resource interface {
-	Start(ctx context.Context) error
-	Close() error
-}
-
 type activeResourceWrapper struct {
-	instance resource
+	instance schema.Resource
 	lastUsed time.Time
 	mu       sync.Mutex
 }
@@ -30,13 +30,15 @@ func (w *activeResourceWrapper) getLastUsed() time.Time {
 }
 
 type ResourceManager struct {
+	ctx               context.Context
+	registry          Registry
 	activeResources   map[string]*activeResourceWrapper
 	mu                sync.RWMutex
 	ttl               time.Duration
 	cleanerCancelFunc context.CancelFunc
 }
 
-func (rm *ResourceManager) Get(id string) (resource, bool) {
+func (rm *ResourceManager) Get(id string) (schema.Resource, bool) {
 	rm.mu.RLock()
 	wrapper, ok := rm.activeResources[id]
 	rm.mu.RUnlock()
@@ -47,7 +49,7 @@ func (rm *ResourceManager) Get(id string) (resource, bool) {
 	return wrapper.instance, true
 }
 
-func (rm *ResourceManager) setInternal(id string, res resource) {
+func (rm *ResourceManager) Set(id string, res schema.Resource) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -60,11 +62,6 @@ func (rm *ResourceManager) setInternal(id string, res resource) {
 		instance: res,
 		lastUsed: time.Now(),
 	}
-}
-
-// Set fulfills the public and internal wrapper assignment.
-func (rm *ResourceManager) Set(id string, res resource) {
-	rm.setInternal(id, res)
 }
 
 func (rm *ResourceManager) Remove(id string) bool {
@@ -117,6 +114,45 @@ func (rm *ResourceManager) StartCleaner(ctx context.Context) {
 	}()
 }
 
+// InitializeResource instantiates a registered resource type, maps the provided configuration map,
+// starts the resource, and registers it in the active resources map under the given ID.
+func (rm *ResourceManager) InitializeResource(id string, resourceTypeName string, config map[string]any) error {
+	resReg, ok := rm.registry.GetResource(resourceTypeName)
+	if !ok {
+		return fmt.Errorf("resource type %q not registered in namespace %s", resourceTypeName)
+	}
+
+	// Instantiate the registered type via reflect.New
+	val := reflect.New(resReg.ResourceType)
+
+	// Map configuration map[string]any if provided
+	if config != nil {
+		configBytes, err := json.Marshal(config)
+		if err != nil {
+			return fmt.Errorf("failed to marshal configuration map for resource %q: %w", id, err)
+		}
+		if err := json.Unmarshal(configBytes, val.Interface()); err != nil {
+			return fmt.Errorf("failed to unmarshal configuration for resource %q: %w", id, err)
+		}
+	}
+
+	// Verify the instance implements the Resource interface
+	resInstance, ok := val.Interface().(schema.Resource)
+	if !ok {
+		return fmt.Errorf("resource type %q does not implement Resource interface", resourceTypeName)
+	}
+
+	// Start the resource
+	if err := resInstance.Start(rm.ctx); err != nil {
+		return fmt.Errorf("failed to start resource %q: %w", id, err)
+	}
+
+	// Register in the active resources map via ResourceManager
+	rm.Set(id, resInstance)
+
+	return nil
+}
+
 func (rm *ResourceManager) cleanupIdle() {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -131,11 +167,14 @@ func (rm *ResourceManager) cleanupIdle() {
 	}
 }
 
-func NewResourceManager(ttl time.Duration) *ResourceManager {
+func NewResourceManager(ctx context.Context, registry Registry, ttl time.Duration) *ResourceManager {
 	if ttl <= 0 {
 		ttl = 15 * time.Minute // default TTL
 	}
+
 	return &ResourceManager{
+		ctx:             ctx,
+		registry:        registry,
 		activeResources: make(map[string]*activeResourceWrapper),
 		ttl:             ttl,
 	}

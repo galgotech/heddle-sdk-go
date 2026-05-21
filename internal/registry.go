@@ -1,4 +1,4 @@
-package plugin
+package internal
 
 import (
 	"encoding/json"
@@ -15,7 +15,19 @@ import (
 
 	"github.com/galgotech/heddle-lang/pkg/logger"
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
+	"github.com/galgotech/heddle-sdk-go/schema"
+	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
+
+type Registry interface {
+	RegisterResource(name string, resource any) error
+	RegisterStep(name string, fn any) error
+	ResolveSchema(req baseplugin.ResolveSchemaRequest) baseplugin.ResolveSchemaResponse
+	GetStep(name string) (StepRegistration, bool)
+	GetResource(name string) (resourceRegistration, bool)
+	AllSteps() map[string]StepRegistration
+	AllResources() map[string]resourceRegistration
+}
 
 type schemaRegistry struct {
 	namespace string
@@ -40,7 +52,7 @@ func (r *schemaRegistry) RegisterResource(name string, resource any) error {
 
 	// Validate that the pointer to this struct implements the Resource interface
 	ptrTyp := reflect.PointerTo(typ)
-	if !ptrTyp.Implements(reflect.TypeFor[Resource]()) {
+	if !ptrTyp.Implements(reflect.TypeFor[pluginschema.Resource]()) {
 		return fmt.Errorf("resource %q (pointer type %s) must implement the Resource interface", name, ptrTyp)
 	}
 
@@ -114,7 +126,7 @@ func (r *schemaRegistry) RegisterStep(name string, fn any) error {
 	inType := inputType.Elem()
 	for i := 0; i < inType.NumField(); i++ {
 		f := inType.Field(i)
-		if f.Type == reflect.TypeFor[HeddleFrame]() || f.Type == reflect.TypeFor[DynamicFrame]() {
+		if f.Type == reflect.TypeFor[pluginschema.HeddleFrame]() || f.Type == reflect.TypeFor[pluginschema.DynamicFrame]() {
 			inputHeddleFrameIndex = i
 		} else if !f.Anonymous {
 			inputFieldsIndex = append(inputFieldsIndex, i)
@@ -126,7 +138,7 @@ func (r *schemaRegistry) RegisterStep(name string, fn any) error {
 	outType := outputType.Elem()
 	for i := 0; i < outType.NumField(); i++ {
 		f := outType.Field(i)
-		if f.Type == reflect.TypeFor[HeddleFrame]() || f.Type == reflect.TypeFor[DynamicFrame]() {
+		if f.Type == reflect.TypeFor[pluginschema.HeddleFrame]() || f.Type == reflect.TypeFor[pluginschema.DynamicFrame]() {
 			outputHeddleFrameIndex = i
 		} else if !f.Anonymous {
 			outputFieldsIndex = append(outputFieldsIndex, i)
@@ -174,7 +186,7 @@ func (r *schemaRegistry) ResolveSchema(req baseplugin.ResolveSchemaRequest) base
 		}
 	}
 
-	if resolver, ok := configVal.Interface().(TypeResolver); ok {
+	if resolver, ok := configVal.Interface().(schema.TypeResolver); ok {
 		input, output, err := resolver.ResolveTypes()
 		if err != nil {
 			return baseplugin.ResolveSchemaResponse{Error: fmt.Sprintf("failed to resolve types: %v", err)}
@@ -286,7 +298,7 @@ func extractMetadata(fnPtr uintptr) (doc string, code string, file string, line 
 	return
 }
 
-func newRegistry(namespace string) Registry {
+func NewRegistry(namespace string) Registry {
 	return &schemaRegistry{
 		namespace: namespace,
 		resources: make(map[string]resourceRegistration),

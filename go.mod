@@ -1,4 +1,4 @@
-module github.com/galgotech/heddle-lang/sdk/go
+module github.com/galgotech/heddle-sdk-go
 
 go 1.26.2
 
@@ -36,4 +36,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/galgotech/heddle-lang => ../heddle-lang

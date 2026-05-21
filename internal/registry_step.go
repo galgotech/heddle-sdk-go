@@ -21,20 +21,26 @@ type StepRegistration struct {
 	SourceFile    string
 	SourceLine    int
 
-	inputHeddleFrameIndex  int
-	outputHeddleFrameIndex int
-	inputFieldsIndex       []int
-	outputFieldsIndex      []int
+	inputFieldsIndex  []int
+	outputFieldsIndex []int
+	GroupInstance     reflect.Value
 }
 
-func (s *StepRegistration) newInputOutput() (reflect.Value, reflect.Value) {
-	inputVal := reflect.New(s.InputType.Elem())
-	outputVal := reflect.New(s.OutputType.Elem())
+func (s *StepRegistration) newInput() reflect.Value {
+	inType := s.InputType
+	if inType.Kind() == reflect.Pointer {
+		inType = inType.Elem()
+	}
+	outType := s.OutputType
+	if outType.Kind() == reflect.Pointer {
+		outType = outType.Elem()
+	}
+
+	inputVal := reflect.New(inType)
 
 	s.initFrame(inputVal, s.inputFieldsIndex)
-	s.initFrame(outputVal, s.outputFieldsIndex)
 
-	return inputVal, outputVal
+	return inputVal
 }
 
 func (s *StepRegistration) initFrame(val reflect.Value, indices []int) {
@@ -42,6 +48,8 @@ func (s *StepRegistration) initFrame(val reflect.Value, indices []int) {
 
 	for _, i := range indices {
 		f := v.Field(i)
-		f.Set(reflect.New(f.Type().Elem()))
+		if f.Type().Kind() == reflect.Pointer {
+			f.Set(reflect.New(f.Type().Elem()))
+		}
 	}
 }

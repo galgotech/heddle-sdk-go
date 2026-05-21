@@ -26,12 +26,11 @@ type NetworkClient interface {
 }
 
 type flightNetworkClient struct {
-	namespace       string
-	language        string
-	ready           chan struct{}
-	registry        Registry
-	executor        Executor
-	resourceManager *ResourceManager
+	namespace string
+	language  string
+	ready     chan struct{}
+	registry  Registry
+	executor  Executor
 }
 
 // Start initializes the plugin's lifecycle, establishing a resilient connection to the Worker.
@@ -40,11 +39,8 @@ func (nc *flightNetworkClient) Start(ctx context.Context) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Ensure all active resources are closed and cleaner stopped when this method returns.
-	defer nc.resourceManager.CloseAll()
-
-	// Start resource cleaner using the signal context so that it terminates automatically.
-	nc.resourceManager.StartCleaner(ctx)
+	// Ensure all active resources are closed when this method returns.
+	defer nc.registry.CloseAllResources()
 
 	var opts []grpc.DialOption
 	var err error
@@ -258,14 +254,12 @@ func NewNetworkClient(
 	ready chan struct{},
 	reg Registry,
 	exec Executor,
-	rm *ResourceManager,
 ) NetworkClient {
 	return &flightNetworkClient{
-		namespace:       namespace,
-		language:        language,
-		ready:           ready,
-		registry:        reg,
-		executor:        exec,
-		resourceManager: rm,
+		namespace: namespace,
+		language:  language,
+		ready:     ready,
+		registry:  reg,
+		executor:  exec,
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
+	"github.com/galgotech/heddle-sdk-go/internal/resourcelink"
 )
 
 type TestResource struct {
@@ -29,14 +31,18 @@ type TestResource struct {
 func (r *TestResource) Start(ctx context.Context) error { return nil }
 func (r *TestResource) Close() error                    { return nil }
 
+type TestResourceGroup struct {
+	DB pluginschema.Resource[*TestResource]
+}
+
 func TestRegisterResource(t *testing.T) {
 	p := New(t.Context(), "test")
-	err := p.RegisterResource("test_res", TestResource{})
+	err := p.Register(&TestResourceGroup{})
 	require.NoError(t, err)
 
-	reg, ok := p.registry.GetResource("test_res")
+	reg, ok := p.registry.GetResource("testresource")
 	require.True(t, ok)
-	assert.Equal(t, "test_res", reg.Name)
+	assert.Equal(t, "testresource", reg.Name)
 	require.NotNil(t, reg.ResourceSchema)
 	assert.Equal(t, 2, len(reg.ResourceSchema.Fields))
 	assert.Equal(t, "Host", reg.ResourceSchema.Fields[0].Name)
@@ -45,11 +51,8 @@ func TestRegisterResource(t *testing.T) {
 
 func TestPluginRegistrationIncludesResources(t *testing.T) {
 	p := New(t.Context(), "test")
-	err := p.RegisterResource("my_resource", TestResource{})
+	err := p.Register(&TestResourceGroup{})
 	require.NoError(t, err)
-
-	// Since we want to test the registration structure, let's manually build it
-	// using the same logic as in plugin.go for verification.
 
 	resources := make(map[string]*schema.ResourceAndConfigSchema)
 	for name, res := range p.registry.AllResources() {
@@ -61,31 +64,39 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 		Resources: resources,
 	}
 
-	assert.Contains(t, reg.Resources, "my_resource")
-	assert.NotNil(t, reg.Resources["my_resource"])
+	assert.Contains(t, reg.Resources, "testresource")
+	assert.NotNil(t, reg.Resources["testresource"])
 
 	// Test JSON marshaling
 	body, err := json.Marshal(reg)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "resources")
-	assert.Contains(t, string(body), "my_resource")
+	assert.Contains(t, string(body), "testresource")
 }
 
-func TestInitializeResource(t *testing.T) {
-	p := New(t.Context(), "test")
-	err := p.RegisterResource("test_res", TestResource{})
+func TestLazyResourceAndConcurrency(t *testing.T) {
+	ctx := t.Context()
+	p := New(ctx, "test")
+	group := &TestResourceGroup{}
+	resourcelink.Configure(&group.DB, map[string]any{"Host": "127.0.0.1", "Port": 8080})
+
+	err := p.Register(group)
 	require.NoError(t, err)
 
-	config := map[string]any{"Host": "127.0.0.1", "Port": 8080}
-	err = p.InitializeResource("my_active_res", "test_res", config)
-	require.NoError(t, err)
-	activeRes, ok := p.resourceManager.Get("my_active_res")
-	require.True(t, ok)
-
-	testRes, ok := activeRes.(*TestResource)
-	require.True(t, ok)
-	assert.Equal(t, "127.0.0.1", testRes.Host)
-	assert.Equal(t, 8080, testRes.Port)
+	// Since we shallow-cloned the prototype on registration, the active state is shared.
+	// Let's call Get() from multiple goroutines concurrently to verify thread safety!
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res := group.DB.Get()
+			require.NotNil(t, res)
+			assert.Equal(t, "127.0.0.1", res.Host)
+			assert.Equal(t, 8080, res.Port)
+		}()
+	}
+	wg.Wait()
 }
 
 type mockFlightServer struct {
@@ -188,47 +199,44 @@ func TestPluginConnectRetry(t *testing.T) {
 }
 
 type TestRegistrationInput struct {
-	pluginschema.HeddleFrame
-	Data *pluginschema.Int64
+	Data pluginschema.Col[int64]
 }
 
 type TestRegistrationOutput struct {
-	pluginschema.HeddleFrame
-	Result *pluginschema.String
+	Result pluginschema.Col[string]
 }
 
+type MyTestGroup struct{}
+
 // MyDocComment is a test doc comment.
-func MyTestStep(ctx context.Context, config struct{}, input *TestRegistrationInput, output *TestRegistrationOutput) error {
-	return nil
+func (s *MyTestGroup) MyTestStep(ctx context.Context, config struct{}, input *TestRegistrationInput) (*TestRegistrationOutput, error) {
+	return nil, nil
 }
 
 func TestRegisterStepMetadata(t *testing.T) {
 	p := New(t.Context(), "test")
-	err := p.RegisterStep("my_step", MyTestStep)
+	err := p.Register(&MyTestGroup{})
 	require.NoError(t, err)
 
-	reg, ok := p.registry.GetStep("my_step")
+	reg, ok := p.registry.GetStep("mytestgroup.myteststep")
 	require.True(t, ok)
 	assert.Equal(t, "MyDocComment is a test doc comment.\n", reg.Documentation)
-	assert.Contains(t, reg.SourceCode, "func MyTestStep")
-	assert.Contains(t, reg.SourceCode, "return nil")
+	assert.Contains(t, reg.SourceCode, "func (s *MyTestGroup) MyTestStep")
+	assert.Contains(t, reg.SourceCode, "return nil, nil")
 	assert.Contains(t, reg.SourceFile, "plugin_test.go")
 }
 
 type TestBindInput struct {
-	pluginschema.HeddleFrame
-	A *pluginschema.Float64
-	B *pluginschema.Float64
+	A pluginschema.Col[float64]
+	B pluginschema.Col[float64]
 }
 
 type TestBindOutput struct {
-	pluginschema.HeddleFrame
-	A *pluginschema.Float64
-	B *pluginschema.Float64
+	A pluginschema.Col[float64]
+	B pluginschema.Col[float64]
 }
 
 type TestFrame struct {
-	pluginschema.HeddleFrame
-	A *pluginschema.Float64
-	B *pluginschema.Float64
+	A pluginschema.Col[float64]
+	B pluginschema.Col[float64]
 }

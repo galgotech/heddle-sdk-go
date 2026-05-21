@@ -11,10 +11,9 @@ import (
 )
 
 type SchemaTable struct {
-	pluginschema.HeddleFrame
-	ID     *pluginschema.Int64
-	Email  *pluginschema.String
-	Active *pluginschema.Bool
+	ID     pluginschema.Col[int64]
+	Email  pluginschema.Col[string]
+	Active pluginschema.Col[bool]
 }
 
 func TestExtractSchema(t *testing.T) {
@@ -41,7 +40,6 @@ func TestExtractSchema(t *testing.T) {
 
 func TestExtractConfigSchema(t *testing.T) {
 	type ConfigTest struct {
-		pluginschema.Config
 		Name    string `json:"name"`
 		Timeout int    `json:"timeout"`
 		Hidden  string `json:"-"`

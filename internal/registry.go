@@ -1,32 +1,37 @@
 package internal
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/galgotech/heddle-lang/pkg/logger"
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
-	"github.com/galgotech/heddle-sdk-go/schema"
+	"github.com/galgotech/heddle-lang/pkg/schema"
+	"github.com/galgotech/heddle-sdk-go/internal/resourcelink"
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
 type Registry interface {
-	RegisterResource(name string, resource any) error
-	RegisterStep(name string, fn any) error
+	RegisterGroup(group any) error
 	ResolveSchema(req baseplugin.ResolveSchemaRequest) baseplugin.ResolveSchemaResponse
 	GetStep(name string) (StepRegistration, bool)
 	GetResource(name string) (resourceRegistration, bool)
 	AllSteps() map[string]StepRegistration
 	AllResources() map[string]resourceRegistration
+	CloseAllResources()
 }
 
 type schemaRegistry struct {
@@ -36,10 +41,7 @@ type schemaRegistry struct {
 	mu        sync.RWMutex
 }
 
-func (r *schemaRegistry) RegisterResource(name string, resource any) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
+func (r *schemaRegistry) registerResourceLocked(name string, resource any) error {
 	typ := reflect.TypeOf(resource)
 
 	if typ.Kind() == reflect.Pointer {
@@ -52,7 +54,7 @@ func (r *schemaRegistry) RegisterResource(name string, resource any) error {
 
 	// Validate that the pointer to this struct implements the Resource interface
 	ptrTyp := reflect.PointerTo(typ)
-	if !ptrTyp.Implements(reflect.TypeFor[pluginschema.Resource]()) {
+	if !ptrTyp.Implements(reflect.TypeFor[pluginschema.ResourceInterface]()) {
 		return fmt.Errorf("resource %q (pointer type %s) must implement the Resource interface", name, ptrTyp)
 	}
 
@@ -83,93 +85,6 @@ func (r *schemaRegistry) RegisterResource(name string, resource any) error {
 	return nil
 }
 
-func (r *schemaRegistry) RegisterStep(name string, fn any) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	typ := reflect.TypeOf(fn)
-
-	if typ.Kind() != reflect.Func {
-		return fmt.Errorf("step %q must be a function", name)
-	}
-
-	// Ensure the function signature matches one of the expected contracts:
-	// func(context.Context, TConfig, TInput, TOutput) error
-	if typ.NumIn() != 4 || typ.NumOut() != 1 {
-		return fmt.Errorf("step %q must have signature func(ctx, config, input, output) error", name)
-	}
-
-	configType := typ.In(1)
-	inputType := typ.In(2)
-	outputType := typ.In(3)
-
-	configSchema, err := extractResourceAndConfigSchema(configType)
-	if err != nil {
-		logger.L().Error("Failed to extract step config schema", zap.String("step", name), zap.Error(err))
-		return fmt.Errorf("step %q config: %w", name, err)
-	}
-
-	inputSchema, err := extractInputOutputSchema(inputType)
-	if err != nil {
-		logger.L().Error("Failed to extract step input schema", zap.String("step", name), zap.Error(err))
-		return fmt.Errorf("step %q input: %w", name, err)
-	}
-
-	outputSchema, err := extractInputOutputSchema(outputType)
-	if err != nil {
-		logger.L().Error("Failed to extract step output schema", zap.String("step", name), zap.Error(err))
-		return fmt.Errorf("step %q output: %w", name, err)
-	}
-
-	var inputHeddleFrameIndex int
-	inputFieldsIndex := []int{}
-	inType := inputType.Elem()
-	for i := 0; i < inType.NumField(); i++ {
-		f := inType.Field(i)
-		if f.Type == reflect.TypeFor[pluginschema.HeddleFrame]() || f.Type == reflect.TypeFor[pluginschema.DynamicFrame]() {
-			inputHeddleFrameIndex = i
-		} else if !f.Anonymous {
-			inputFieldsIndex = append(inputFieldsIndex, i)
-		}
-	}
-
-	var outputHeddleFrameIndex int
-	outputFieldsIndex := []int{}
-	outType := outputType.Elem()
-	for i := 0; i < outType.NumField(); i++ {
-		f := outType.Field(i)
-		if f.Type == reflect.TypeFor[pluginschema.HeddleFrame]() || f.Type == reflect.TypeFor[pluginschema.DynamicFrame]() {
-			outputHeddleFrameIndex = i
-		} else if !f.Anonymous {
-			outputFieldsIndex = append(outputFieldsIndex, i)
-		}
-	}
-
-	doc, code, file, line := extractMetadata(reflect.ValueOf(fn).Pointer())
-
-	logger.L().Debug("Registering step", zap.String("name", name))
-	r.steps[name] = StepRegistration{
-		Name:                   name,
-		Func:                   reflect.ValueOf(fn),
-		ConfigSchema:           configSchema,
-		ConfigType:             configType,
-		InputSchema:            inputSchema,
-		InputType:              inputType,
-		OutputSchema:           outputSchema,
-		OutputType:             outputType,
-		Documentation:          doc,
-		SourceCode:             code,
-		SourceFile:             file,
-		SourceLine:             line,
-		inputHeddleFrameIndex:  inputHeddleFrameIndex,
-		outputHeddleFrameIndex: outputHeddleFrameIndex,
-		inputFieldsIndex:       inputFieldsIndex,
-		outputFieldsIndex:      outputFieldsIndex,
-	}
-
-	return nil
-}
-
 func (r *schemaRegistry) ResolveSchema(req baseplugin.ResolveSchemaRequest) baseplugin.ResolveSchemaResponse {
 	r.mu.RLock()
 	targetStep, ok := r.steps[req.StepName]
@@ -186,20 +101,103 @@ func (r *schemaRegistry) ResolveSchema(req baseplugin.ResolveSchemaRequest) base
 		}
 	}
 
-	if resolver, ok := configVal.Interface().(schema.TypeResolver); ok {
-		input, output, err := resolver.ResolveTypes()
-		if err != nil {
-			return baseplugin.ResolveSchemaResponse{Error: fmt.Sprintf("failed to resolve types: %v", err)}
+	var inputSchema *schema.FrameSchema = targetStep.InputSchema
+	var outputSchema *schema.FrameSchema = targetStep.OutputSchema
+	hasResolved := false
+
+	ptrType := reflect.PointerTo(targetStep.GroupInstance.Type())
+
+	// Resolve dynamic input schema using method ResolveInput on the group receiver
+	if method, ok := ptrType.MethodByName("ResolveInput"); ok {
+		receiverVal := reflect.New(targetStep.GroupInstance.Type())
+		receiverVal.Elem().Set(targetStep.GroupInstance)
+		ctxVal := reflect.ValueOf(context.Background())
+		configArg := configVal.Elem()
+		if method.Type.In(2).Kind() == reflect.Pointer {
+			configArg = configVal
 		}
-		return baseplugin.ResolveSchemaResponse{
-			Input:  input,
-			Output: output,
+		results := method.Func.Call([]reflect.Value{
+			receiverVal,
+			ctxVal,
+			configArg,
+			reflect.ValueOf(req.StepName),
+		})
+		if len(results) == 2 {
+			if !results[1].IsNil() {
+				return baseplugin.ResolveSchemaResponse{Error: results[1].Interface().(error).Error()}
+			}
+			var cols []pluginschema.ColSchema
+			if !results[0].IsNil() {
+				cols = results[0].Interface().([]pluginschema.ColSchema)
+			}
+			inputSchema = convertColSchemaToFrameSchema(cols)
+			hasResolved = true
+		}
+	}
+
+	// Resolve dynamic output schema using method ResolveOutput on the group receiver
+	if method, ok := ptrType.MethodByName("ResolveOutput"); ok {
+		receiverVal := reflect.New(targetStep.GroupInstance.Type())
+		receiverVal.Elem().Set(targetStep.GroupInstance)
+		ctxVal := reflect.ValueOf(context.Background())
+		configArg := configVal.Elem()
+		if method.Type.In(2).Kind() == reflect.Pointer {
+			configArg = configVal
+		}
+		results := method.Func.Call([]reflect.Value{
+			receiverVal,
+			ctxVal,
+			configArg,
+			reflect.ValueOf(req.StepName),
+		})
+		if len(results) == 2 {
+			if !results[1].IsNil() {
+				return baseplugin.ResolveSchemaResponse{Error: results[1].Interface().(error).Error()}
+			}
+			var cols []pluginschema.ColSchema
+			if !results[0].IsNil() {
+				cols = results[0].Interface().([]pluginschema.ColSchema)
+			}
+			outputSchema = convertColSchemaToFrameSchema(cols)
+			hasResolved = true
+		}
+	}
+
+	if !hasResolved {
+		if resolver, ok := configVal.Interface().(pluginschema.TypeResolver); ok {
+			colsInput, err := resolver.ResolveTypeInput(context.Background(), configVal.Interface(), req.StepName)
+			if err != nil {
+				return baseplugin.ResolveSchemaResponse{Error: fmt.Sprintf("failed to resolve type input: %v", err)}
+			}
+			colsOutput, err := resolver.ResolveTypeOutput(context.Background(), configVal.Interface(), req.StepName)
+			if err != nil {
+				return baseplugin.ResolveSchemaResponse{Error: fmt.Sprintf("failed to resolve type output: %v", err)}
+			}
+			inputSchema = convertColSchemaToFrameSchema(colsInput)
+			outputSchema = convertColSchemaToFrameSchema(colsOutput)
 		}
 	}
 
 	return baseplugin.ResolveSchemaResponse{
-		Input:  targetStep.InputSchema,
-		Output: targetStep.OutputSchema,
+		Input:  inputSchema,
+		Output: outputSchema,
+	}
+}
+
+func convertColSchemaToFrameSchema(cols []pluginschema.ColSchema) *schema.FrameSchema {
+	fields := make([]schema.FrameSchemaField, 0, len(cols))
+	for _, col := range cols {
+		arrowType := col.Type
+		if arrowType == "string" {
+			arrowType = "utf8"
+		}
+		fields = append(fields, schema.FrameSchemaField{
+			Name:      col.Name,
+			ArrowType: arrowType,
+		})
+	}
+	return &schema.FrameSchema{
+		Fields: fields,
 	}
 }
 
@@ -233,9 +231,7 @@ func (r *schemaRegistry) AllResources() map[string]resourceRegistration {
 	defer r.mu.RUnlock()
 
 	resourcesCopy := make(map[string]resourceRegistration, len(r.resources))
-	for k, v := range r.resources {
-		resourcesCopy[k] = v
-	}
+	maps.Copy(resourcesCopy, r.resources)
 	return resourcesCopy
 }
 
@@ -296,6 +292,192 @@ func extractMetadata(fnPtr uintptr) (doc string, code string, file string, line 
 		}
 	}
 	return
+}
+
+func (r *schemaRegistry) RegisterGroup(group any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	groupVal := reflect.ValueOf(group)
+	groupType := groupVal.Type()
+
+	var prototype reflect.Value
+
+	if groupType.Kind() == reflect.Pointer {
+		if groupType.Elem().Kind() != reflect.Struct {
+			return fmt.Errorf("RegisterGroup: expected pointer to struct, got pointer to %s", groupType.Elem().Kind())
+		}
+		groupType = groupType.Elem()
+		groupVal = groupVal.Elem()
+
+		prototype = reflect.New(groupType).Elem()
+		prototype.Set(groupVal)
+	} else if groupType.Kind() == reflect.Struct {
+		prototype = reflect.New(groupType).Elem()
+		prototype.Set(groupVal)
+	} else {
+		return fmt.Errorf("RegisterGroup: expected pointer to struct, got %s", groupType.Kind())
+	}
+
+	// 1. Iterate over fields of groupType to find and register Resource fields
+	for i := 0; i < groupType.NumField(); i++ {
+		field := groupType.Field(i)
+		if isResource(field.Type) {
+			// Initialize the internal state of the Resource field in prototype
+			resField := prototype.Field(i)
+			if resField.CanAddr() {
+				// Use 15 * time.Minute as the default idle timeout / TTL
+				resourcelink.InitState(resField.Addr().Interface(), 15*time.Minute)
+			}
+
+			// The underlying resource type R is field.Type.Field(0).Type
+			resType := field.Type.Field(0).Type
+
+			structType := resType
+			if structType.Kind() == reflect.Pointer {
+				structType = structType.Elem()
+			}
+			resName := strings.ToLower(structType.Name())
+
+			if _, exists := r.resources[resName]; !exists {
+				var resourceObj any
+				if resType.Kind() == reflect.Pointer {
+					resourceObj = reflect.New(resType.Elem()).Interface()
+				} else {
+					resourceObj = reflect.New(resType).Interface()
+				}
+
+				err := r.registerResourceLocked(resName, resourceObj)
+				if err != nil {
+					return fmt.Errorf("failed to register resource %s: %w", resName, err)
+				}
+			}
+		}
+	}
+
+	// 2. Iterate over methods of *groupType to register Steps
+	ptrType := reflect.PointerTo(groupType)
+	structName := strings.ToLower(groupType.Name())
+
+	for i := 0; i < ptrType.NumMethod(); i++ {
+		method := ptrType.Method(i)
+		methodType := method.Type // func(receiver, ctx, config, in) (*out, error)
+
+		if method.Name == "ResolveTypes" || method.Name == "ResolveInput" || method.Name == "ResolveOutput" {
+			continue
+		}
+
+		if methodType.NumIn() != 4 || methodType.NumOut() != 2 {
+			continue
+		}
+
+		ctxType := methodType.In(1)
+		configType := methodType.In(2)
+		inputType := methodType.In(3)
+		outputType := methodType.Out(0)
+		errType := methodType.Out(1)
+
+		if !ctxType.Implements(reflect.TypeFor[context.Context]()) {
+			continue
+		}
+		if errType != reflect.TypeFor[error]() {
+			continue
+		}
+
+		stepConfigSchema, err := extractResourceAndConfigSchema(configType)
+		if err != nil {
+			return fmt.Errorf("step config schema for %s: %w", method.Name, err)
+		}
+
+		// "baseado no nome da struct, so que tudo minisculo" -> structName.methodName in lowercase
+		stepName := fmt.Sprintf("%s.%s", structName, strings.ToLower(method.Name))
+
+		if inputType.Kind() != reflect.Pointer {
+			return fmt.Errorf("step %q input: must be a pointer type, got %s", stepName, inputType.String())
+		}
+		if outputType.Kind() != reflect.Pointer {
+			return fmt.Errorf("step %q output: must be a pointer type, got %s", stepName, outputType.String())
+		}
+
+		inputSchema, err := extractInputOutputSchema(inputType)
+		if err != nil {
+			return fmt.Errorf("step %q input: %w", stepName, err)
+		}
+
+		outputSchema, err := extractInputOutputSchema(outputType)
+		if err != nil {
+			return fmt.Errorf("step %q output: %w", stepName, err)
+		}
+
+		inputFieldsIndex := []int{}
+		inType := inputType
+		if inType.Kind() == reflect.Pointer {
+			inType = inType.Elem()
+		}
+		if inType != reflect.TypeFor[pluginschema.Any]() {
+			for j := 0; j < inType.NumField(); j++ {
+				f := inType.Field(j)
+				if !f.Anonymous {
+					inputFieldsIndex = append(inputFieldsIndex, j)
+				}
+			}
+		}
+
+		outputFieldsIndex := []int{}
+		outType := outputType
+		if outType.Kind() == reflect.Pointer {
+			outType = outType.Elem()
+		}
+		if outType != reflect.TypeFor[pluginschema.Any]() {
+			for j := 0; j < outType.NumField(); j++ {
+				f := outType.Field(j)
+				if !f.Anonymous {
+					outputFieldsIndex = append(outputFieldsIndex, j)
+				}
+			}
+		}
+
+		doc, code, file, line := extractMetadata(method.Func.Pointer())
+
+		logger.L().Debug("Registering method step", zap.String("name", stepName))
+		r.steps[stepName] = StepRegistration{
+			Name:              stepName,
+			Func:              method.Func,
+			ConfigSchema:      stepConfigSchema,
+			ConfigType:        configType,
+			InputSchema:       inputSchema,
+			InputType:         inputType,
+			OutputSchema:      outputSchema,
+			OutputType:        outputType,
+			Documentation:     doc,
+			SourceCode:        code,
+			SourceFile:        file,
+			SourceLine:        line,
+			inputFieldsIndex:  inputFieldsIndex,
+			outputFieldsIndex: outputFieldsIndex,
+			GroupInstance:     prototype,
+		}
+	}
+
+	return nil
+}
+
+func (r *schemaRegistry) CloseAllResources() {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, step := range r.steps {
+		v := step.GroupInstance
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Field(i)
+			if isResource(field.Type()) {
+				method := field.Addr().MethodByName("Close")
+				if method.IsValid() {
+					method.Call(nil)
+				}
+			}
+		}
+	}
 }
 
 func NewRegistry(namespace string) Registry {

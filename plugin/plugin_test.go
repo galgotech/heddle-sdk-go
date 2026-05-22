@@ -28,8 +28,12 @@ type TestResource struct {
 	Port int
 }
 
-func (r *TestResource) Start(ctx context.Context) error { return nil }
-func (r *TestResource) Close() error                    { return nil }
+func (r *TestResource) Start(ctx context.Context) error {
+	return nil
+}
+func (r *TestResource) Close() error {
+	return nil
+}
 
 type TestResourceGroup struct {
 	DB pluginschema.Resource[*TestResource]

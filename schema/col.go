@@ -1,23 +1,65 @@
 package schema
 
-type Col[T any] struct {
-	// Array interno do Arrow oculto (sem exportar)
-	// arrowArray arrow.Array
+import (
+	"context"
 
-	// Cache de acesso rápido Zero-Copy
-	Data []T
+	"github.com/bwmarrin/snowflake"
+)
+
+var colIDNode *snowflake.Node
+
+// TypeResolver is an optional interface that configurations can implement
+// to provide dynamic input and output schemas based on their values.
+type TypeResolver interface {
+	ResolveTypeInput(ctx context.Context, config any, stepName string) ([]ColSchema, error)
+	ResolveTypeOutput(ctx context.Context, config any, stepName string) ([]ColSchema, error)
 }
 
-func NewCol[T any](data []T) Col[T] {
-	return Col[T]{Data: data}
+type Col[T any] struct {
+	// Cache de acesso rápido Zero-Copy
+	data  []T
+	ids   []int64
+	dirty []bool
 }
 
 func (c Col[T]) Len() int {
-	return len(c.Data)
+	return len(c.data)
 }
 
 func (c Col[T]) Value(i int) T {
-	return c.Data[i]
+	return c.data[i]
+}
+
+func (c *Col[T]) Delete(i int) {
+	if i >= 0 && i < len(c.dirty) {
+		c.dirty[i] = true
+	}
+}
+
+func (c Col[T]) IsDeleted(i int) bool {
+	if i >= 0 && i < len(c.dirty) {
+		return c.dirty[i]
+	}
+	return false
+}
+
+func (c Col[T]) ID(i int) int64 {
+	if i >= 0 && i < len(c.ids) {
+		return c.ids[i]
+	}
+	return 0
+}
+
+func NewCol[T any](data []T) Col[T] {
+	ids := make([]int64, len(data))
+	for i := range ids {
+		ids[i] = colIDNode.Generate().Int64()
+	}
+	return Col[T]{
+		data:  data,
+		ids:   ids,
+		dirty: make([]bool, len(data)),
+	}
 }
 
 // FrameSchema defines the structure of a HeddleFrame.
@@ -47,3 +89,11 @@ func (a *Any) Columns() map[string]any {
 }
 
 type Void struct{}
+
+func init() {
+	var err error
+	colIDNode, err = snowflake.NewNode(1)
+	if err != nil {
+		panic(err)
+	}
+}

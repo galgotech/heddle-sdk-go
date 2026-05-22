@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
@@ -71,8 +72,7 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 	// 2.1 Configure resource fields with their definitions from the worker
 	if len(request.Resources) > 0 {
 		v := receiverVal.Elem()
-		for i := 0; i < v.NumField(); i++ {
-			field := v.Field(i)
+		for _, field := range v.Fields() {
 			if isResource(field.Type()) {
 				// field.Type() is schema.Resource[T]
 				// The first field of schema.Resource[T] is resource T (which is field.Type().Field(0).Type)
@@ -234,6 +234,10 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 		vVal = vVal.Elem()
 	}
 
+	inputIDs := extractIDs(inputVal)
+	overwriteOutputIDs(vVal, inputIDs)
+
+
 	// Check if the output is a VoidFrame (explicitly no-data).
 	outT := targetStep.OutputType
 	if outT.Kind() == reflect.Pointer {
@@ -286,7 +290,7 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 			name := t.Field(i).Name
 
 			if isCol(fValue.Type()) {
-				dataSlice := fValue.FieldByName("Data").Interface()
+				dataSlice := getUnexportedField(fValue, "data").Interface()
 				arr, err := sliceToArrowArray(dataSlice)
 				if err != nil {
 					return baseplugin.ExecuteStepResponse{
@@ -306,6 +310,22 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 						}
 					} else {
 						outputHandles[name] = path
+					}
+				}
+
+				idsSlice := getUnexportedField(fValue, "ids").Interface()
+				if idsArr, err := sliceToArrowArray(idsSlice); err == nil && idsArr != nil && !reflect.ValueOf(idsArr).IsNil() {
+					defer idsArr.Release()
+					if path, err := locality.WriteArrowArrayOnlyToShm(idsArr); err == nil {
+						outputHandles[name+"_id"] = path
+					}
+				}
+
+				dirtySlice := getUnexportedField(fValue, "dirty").Interface()
+				if dirtyArr, err := sliceToArrowArray(dirtySlice); err == nil && dirtyArr != nil && !reflect.ValueOf(dirtyArr).IsNil() {
+					defer dirtyArr.Release()
+					if path, err := locality.WriteArrowArrayOnlyToShm(dirtyArr); err == nil {
+						dirtyHandles[name] = path
 					}
 				}
 			}
@@ -400,7 +420,13 @@ func (e *stepExecutor) ExecuteStepDirectly(ctx context.Context, stepName string,
 		execErr = results[1].Interface().(error)
 	}
 
+	if outVal != nil {
+		inputIDs := extractIDs(reflect.ValueOf(input))
+		overwriteOutputIDs(reflect.ValueOf(outVal), inputIDs)
+	}
+
 	return outVal, execErr
+
 }
 
 // bind maps Arrow Table columns to Go struct fields.
@@ -440,7 +466,25 @@ func bind(reflectValue reflect.Value, fieldIndices []int, columns map[string]arr
 			if slice == nil {
 				return fmt.Errorf("failed to convert arrow array for column %s", name)
 			}
-			fValue.FieldByName("Data").Set(reflect.ValueOf(slice))
+			getUnexportedField(fValue, "data").Set(reflect.ValueOf(slice))
+
+			idArr := columns[name+"_id"]
+			if idArr != nil {
+				if idSlice := arrowArrayToSlice(idArr); idSlice != nil {
+					getUnexportedField(fValue, "ids").Set(reflect.ValueOf(idSlice))
+				}
+			} else {
+				getUnexportedField(fValue, "ids").Set(reflect.ValueOf(make([]int64, arr.Len())))
+			}
+
+			dirtyArr := columns[name+"_dirty"]
+			if dirtyArr != nil {
+				if dirtySlice := arrowArrayToSlice(dirtyArr); dirtySlice != nil {
+					getUnexportedField(fValue, "dirty").Set(reflect.ValueOf(dirtySlice))
+				}
+			} else {
+				getUnexportedField(fValue, "dirty").Set(reflect.ValueOf(make([]bool, arr.Len())))
+			}
 		}
 	}
 
@@ -690,3 +734,83 @@ func NewExecutor(registry Registry) Executor {
 		registry: registry,
 	}
 }
+
+func getUnexportedField(v reflect.Value, fieldName string) reflect.Value {
+	if !v.CanAddr() {
+		copyVal := reflect.New(v.Type()).Elem()
+		copyVal.Set(v)
+		v = copyVal
+	}
+	field, ok := v.Type().FieldByName(fieldName)
+	if !ok {
+		panic(fmt.Sprintf("field %s not found in type %s", fieldName, v.Type()))
+	}
+	fieldPtr := unsafe.Pointer(v.UnsafeAddr() + field.Offset)
+	return reflect.NewAt(field.Type, fieldPtr).Elem()
+}
+
+func extractIDs(val reflect.Value) []int64 {
+	if !val.IsValid() {
+		return nil
+	}
+	if val.Kind() == reflect.Pointer {
+		if val.IsNil() {
+			return nil
+		}
+		val = val.Elem()
+	}
+	if val.Kind() != reflect.Struct {
+		return nil
+	}
+	for i := 0; i < val.NumField(); i++ {
+		field := val.Field(i)
+		if isCol(field.Type()) {
+			idsVal := getUnexportedField(field, "ids")
+			if idsVal.IsValid() && idsVal.Kind() == reflect.Slice {
+				ids, ok := idsVal.Interface().([]int64)
+				if ok && len(ids) > 0 {
+					return ids
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func overwriteOutputIDs(outVal reflect.Value, ids []int64) {
+	if !outVal.IsValid() || len(ids) == 0 {
+		return
+	}
+	if outVal.Kind() == reflect.Pointer {
+		if outVal.IsNil() {
+			return
+		}
+		outVal = outVal.Elem()
+	}
+	if outVal.Kind() != reflect.Struct {
+		return
+	}
+	for i := 0; i < outVal.NumField(); i++ {
+		field := outVal.Field(i)
+		if isCol(field.Type()) {
+			idsVal := getUnexportedField(field, "ids")
+			if idsVal.IsValid() && idsVal.CanSet() {
+				dataVal := getUnexportedField(field, "data")
+				dataLen := dataVal.Len()
+
+				newIDs := make([]int64, dataLen)
+				copy(newIDs, ids)
+
+				existingIDs, _ := idsVal.Interface().([]int64)
+				for j := len(ids); j < dataLen; j++ {
+					if j < len(existingIDs) {
+						newIDs[j] = existingIDs[j]
+					}
+				}
+
+				idsVal.Set(reflect.ValueOf(newIDs))
+			}
+		}
+	}
+}
+

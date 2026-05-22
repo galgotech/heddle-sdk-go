@@ -31,7 +31,7 @@ func (p *Plugin) Execute(ctx context.Context, stepName string, configJSON any, i
 }
 
 // New creates a new Heddle Plugin instance within the specified namespace.
-func New(ctx context.Context, namespace string) *Plugin {
+func New(namespace string) *Plugin {
 	ready := make(chan struct{})
 	language := "go"
 

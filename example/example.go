@@ -85,8 +85,7 @@ func (s *Steps) Step2(ctx context.Context, config Config, in *schema.Any) (*sche
 }
 
 func Start() {
-	ctx := context.Background()
-	p := plugin.New(ctx, "ns1")
+	p := plugin.New("ns1")
 
 	steps := &Steps{
 		OtherValue: "123",
@@ -100,8 +99,7 @@ func Start() {
 }
 
 func Run() {
-	ctx := context.Background()
-	p := plugin.New(ctx, "ns1")
+	p := plugin.New("ns1")
 
 	steps := &Steps{
 		OtherValue: "123",
@@ -124,6 +122,7 @@ func Run() {
 		Query: schema.NewCol([]string{"123"}),
 	}
 
+	ctx := context.Background()
 	output, err := p.Execute(ctx, "step1", c, input)
 	if err != nil {
 		logger.L().Error("Failed to execute step", zap.Error(err))

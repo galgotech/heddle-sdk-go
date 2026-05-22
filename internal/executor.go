@@ -237,7 +237,6 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 	inputIDs := extractIDs(inputVal)
 	overwriteOutputIDs(vVal, inputIDs)
 
-
 	// Check if the output is a VoidFrame (explicitly no-data).
 	outT := targetStep.OutputType
 	if outT.Kind() == reflect.Pointer {
@@ -790,8 +789,8 @@ func overwriteOutputIDs(outVal reflect.Value, ids []int64) {
 	if outVal.Kind() != reflect.Struct {
 		return
 	}
-	for i := 0; i < outVal.NumField(); i++ {
-		field := outVal.Field(i)
+	for _, field := range outVal.Fields() {
+		field := field
 		if isCol(field.Type()) {
 			idsVal := getUnexportedField(field, "ids")
 			if idsVal.IsValid() && idsVal.CanSet() {
@@ -813,4 +812,3 @@ func overwriteOutputIDs(outVal reflect.Value, ids []int64) {
 		}
 	}
 }
-

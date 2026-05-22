@@ -40,7 +40,7 @@ type TestResourceGroup struct {
 }
 
 func TestRegisterResource(t *testing.T) {
-	p := New(t.Context(), "test")
+	p := New("test")
 	err := p.Register(&TestResourceGroup{})
 	require.NoError(t, err)
 
@@ -54,7 +54,7 @@ func TestRegisterResource(t *testing.T) {
 }
 
 func TestPluginRegistrationIncludesResources(t *testing.T) {
-	p := New(t.Context(), "test")
+	p := New("test")
 	err := p.Register(&TestResourceGroup{})
 	require.NoError(t, err)
 
@@ -79,8 +79,7 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 }
 
 func TestLazyResourceAndConcurrency(t *testing.T) {
-	ctx := t.Context()
-	p := New(ctx, "test")
+	p := New("test")
 	group := &TestResourceGroup{}
 	resourcelink.Configure(&group.DB, map[string]any{"Host": "127.0.0.1", "Port": 8080})
 
@@ -127,7 +126,7 @@ func TestPluginConnectRetry(t *testing.T) {
 	}
 	_ = os.Remove(socketPath)
 
-	p := New(t.Context(), "test-namespace")
+	p := New("test-namespace")
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -218,7 +217,7 @@ func (s *MyTestGroup) MyTestStep(ctx context.Context, config struct{}, input *Te
 }
 
 func TestRegisterStepMetadata(t *testing.T) {
-	p := New(t.Context(), "test")
+	p := New("test")
 	err := p.Register(&MyTestGroup{})
 	require.NoError(t, err)
 

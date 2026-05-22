@@ -107,6 +107,7 @@ func TestExecuteStepDirectly_PreservesIDs(t *testing.T) {
 	output, ok := outputAny.(*TestOutput)
 	require.True(t, ok)
 
+	assert.Equal(t, inputCol.Len(), output.Col2.Len())
 	assert.Equal(t, 2, output.Col2.Len())
 	assert.Equal(t, int64(12345), output.Col2.ID(0))
 	assert.Equal(t, int64(67890), output.Col2.ID(1))

@@ -26,7 +26,7 @@ func (p *Plugin) Start() error {
 }
 
 // ExecuteStepDirectly executes a registered step directly/locally (without starting gRPC/Arrow Flight, without SHM)
-func (p *Plugin) Execute(ctx context.Context, stepName string, configJSON any, input any) (any, error) {
+func (p *Plugin) Execute(ctx context.Context, stepName string, configJSON any, input any) any {
 	return p.executor.ExecuteStepDirectly(ctx, stepName, configJSON, input)
 }
 

@@ -38,6 +38,24 @@ func TestExtractSchema(t *testing.T) {
 	assert.Equal(t, "bool", s.Fields[2].ArrowType)
 }
 
+type MySubStruct struct {
+	Val string
+}
+
+type SchemaTableWithStruct struct {
+	Nested pluginschema.Col[MySubStruct]
+}
+
+func TestExtractSchema_Struct(t *testing.T) {
+	s, err := extractInputOutputSchema(reflect.TypeFor[*SchemaTableWithStruct]())
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	require.Equal(t, 1, len(s.Fields))
+	assert.Equal(t, "Nested", s.Fields[0].Name)
+	assert.Equal(t, "struct", s.Fields[0].ArrowType)
+}
+
 func TestExtractConfigSchema(t *testing.T) {
 	type ConfigTest struct {
 		Name    string `json:"name"`

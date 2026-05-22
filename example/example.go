@@ -123,9 +123,6 @@ func Run() {
 	}
 
 	ctx := context.Background()
-	output, err := p.Execute(ctx, "step1", c, input)
-	if err != nil {
-		logger.L().Error("Failed to execute step", zap.Error(err))
-	}
+	output := p.Execute(ctx, "step1", c, input)
 	fmt.Println(output)
 }

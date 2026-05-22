@@ -60,3 +60,25 @@ func TestAny(t *testing.T) {
 	assert.Equal(t, 1, len(cols))
 	assert.Equal(t, "bar", cols["foo"])
 }
+
+type MyTestStruct struct {
+	Foo string
+	Bar int
+}
+
+func TestColStruct(t *testing.T) {
+	data := []MyTestStruct{
+		{Foo: "hello", Bar: 42},
+		{Foo: "world", Bar: 100},
+	}
+	col := NewCol(data)
+
+	assert.Equal(t, 2, col.Len())
+	assert.Equal(t, "hello", col.Value(0).Foo)
+	assert.Equal(t, 42, col.Value(0).Bar)
+	assert.Equal(t, "world", col.Value(1).Foo)
+	assert.Equal(t, 100, col.Value(1).Bar)
+
+	assert.NotEqual(t, int64(0), col.ID(0))
+	assert.NotEqual(t, int64(0), col.ID(1))
+}

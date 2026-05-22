@@ -100,8 +100,7 @@ func TestExecuteStepDirectly_PreservesIDs(t *testing.T) {
 		Col1: inputCol,
 	}
 
-	outputAny, err := exec.ExecuteStepDirectly(t.Context(), "teststepgroup.somestep", nil, inputStruct)
-	require.NoError(t, err)
+	outputAny := exec.ExecuteStepDirectly(t.Context(), "teststepgroup.somestep", nil, inputStruct)
 	require.NotNil(t, outputAny)
 
 	output, ok := outputAny.(*TestOutput)
@@ -112,3 +111,75 @@ func TestExecuteStepDirectly_PreservesIDs(t *testing.T) {
 	assert.Equal(t, int64(12345), output.Col2.ID(0))
 	assert.Equal(t, int64(67890), output.Col2.ID(1))
 }
+
+type MyTestRow struct {
+	Name string
+	Age  int
+}
+
+func TestSliceToArrowArray_Struct(t *testing.T) {
+	data := []MyTestRow{
+		{Name: "Alice", Age: 30},
+		{Name: "Bob", Age: 25},
+	}
+	arr, err := sliceToArrowArray(data)
+	require.NoError(t, err)
+	require.NotNil(t, arr)
+	defer arr.Release()
+
+	structArr, ok := arr.(*array.Struct)
+	require.True(t, ok)
+	require.Equal(t, 2, structArr.Len())
+
+	// Field 0: Name (string)
+	nameArr, ok := structArr.Field(0).(*array.String)
+	require.True(t, ok)
+	assert.Equal(t, "Alice", nameArr.Value(0))
+	assert.Equal(t, "Bob", nameArr.Value(1))
+
+	// Field 1: Age (int64 due to int conversion)
+	ageArr, ok := structArr.Field(1).(*array.Int64)
+	require.True(t, ok)
+	assert.Equal(t, int64(30), ageArr.Value(0))
+	assert.Equal(t, int64(25), ageArr.Value(1))
+
+	// Convert back to Go slice
+	sliceVal := arrowStructToGoSlice(structArr, reflect.TypeFor[MyTestRow]())
+	require.Equal(t, 2, sliceVal.Len())
+
+	row0 := sliceVal.Index(0).Interface().(MyTestRow)
+	assert.Equal(t, "Alice", row0.Name)
+	assert.Equal(t, 30, row0.Age)
+
+	row1 := sliceVal.Index(1).Interface().(MyTestRow)
+	assert.Equal(t, "Bob", row1.Name)
+	assert.Equal(t, 25, row1.Age)
+}
+
+type TestStructWithStructCol struct {
+	Rows pluginschema.Col[MyTestRow]
+}
+
+func TestBind_StructCol(t *testing.T) {
+	data := []MyTestRow{
+		{Name: "Charlie", Age: 40},
+	}
+	arr, err := sliceToArrowArray(data)
+	require.NoError(t, err)
+	defer arr.Release()
+
+	columns := map[string]arrow.Array{
+		"Rows": arr,
+	}
+
+	ts := &TestStructWithStructCol{}
+	val := reflect.ValueOf(ts)
+
+	err = bind(val, []int{0}, columns)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, ts.Rows.Len())
+	assert.Equal(t, "Charlie", ts.Rows.Value(0).Name)
+	assert.Equal(t, 40, ts.Rows.Value(0).Age)
+}
+

@@ -119,6 +119,8 @@ func extractInputOutputSchema(t reflect.Type) (*schema.FrameSchema, error) {
 					arrowType = "bool"
 				case reflect.String:
 					arrowType = "utf8"
+				case reflect.Struct:
+					arrowType = "struct"
 				}
 				if arrowType != "" {
 					res.Fields = append(res.Fields, schema.FrameSchemaField{

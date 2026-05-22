@@ -214,12 +214,14 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 	}
 
 	// 5. Handle output results and commit data to SHM.
-	errResult := results[1]
-	if !errResult.IsNil() {
-		return baseplugin.ExecuteStepResponse{
-			TaskID:       request.TaskID,
-			Status:       baseplugin.StepResponseError,
-			ErrorMessage: errResult.Interface().(error).Error(),
+	if len(results) == 2 {
+		errResult := results[1]
+		if !errResult.IsNil() {
+			return baseplugin.ExecuteStepResponse{
+				TaskID:       request.TaskID,
+				Status:       baseplugin.StepResponseError,
+				ErrorMessage: errResult.Interface().(error).Error(),
+			}
 		}
 	}
 
@@ -417,7 +419,7 @@ func (e *stepExecutor) ExecuteStepDirectly(ctx context.Context, stepName string,
 		outVal = results[0].Interface()
 	}
 
-	if !results[1].IsNil() {
+	if len(results) == 2 && !results[1].IsNil() {
 		logger.L().Fatal("step returned an error", zap.String("stepName", stepName), zap.Error(results[1].Interface().(error)))
 	}
 

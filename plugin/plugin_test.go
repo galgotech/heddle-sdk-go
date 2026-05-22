@@ -221,12 +221,30 @@ func TestRegisterStepMetadata(t *testing.T) {
 	err := p.Register(&MyTestGroup{})
 	require.NoError(t, err)
 
-	reg, ok := p.registry.GetStep("mytestgroup.myteststep")
+	reg, ok := p.registry.GetStep("my_test_step")
 	require.True(t, ok)
 	assert.Equal(t, "MyDocComment is a test doc comment.\n", reg.Documentation)
 	assert.Contains(t, reg.SourceCode, "func (s *MyTestGroup) MyTestStep")
 	assert.Contains(t, reg.SourceCode, "return nil, nil")
 	assert.Contains(t, reg.SourceFile, "plugin_test.go")
+}
+
+type AnotherGroup struct{}
+
+// AnotherGroup also defines MyTestStep — should conflict with MyTestGroup.
+func (s *AnotherGroup) MyTestStep(ctx context.Context, config struct{}, input *TestRegistrationInput) (*TestRegistrationOutput, error) {
+	return nil, nil
+}
+
+func TestRegisterDuplicateStepName(t *testing.T) {
+	p := New("test")
+	err := p.Register(&MyTestGroup{})
+	require.NoError(t, err)
+
+	err = p.Register(&AnotherGroup{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "my_test_step")
+	assert.Contains(t, err.Error(), "already registered")
 }
 
 type TestBindInput struct {

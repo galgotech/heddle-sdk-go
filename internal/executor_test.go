@@ -84,6 +84,16 @@ func (g *TestStepGroup) SomeStep(ctx context.Context, config struct{}, input *Te
 	}, nil
 }
 
+func (g *TestStepGroup) SomeStepNoError(ctx context.Context, config struct{}, input *TestInput) *TestOutput {
+	resData := make([]int64, input.Col1.Len())
+	for i := 0; i < input.Col1.Len(); i++ {
+		resData[i] = int64(len(input.Col1.Value(i)))
+	}
+	return &TestOutput{
+		Col2: pluginschema.NewCol(resData),
+	}
+}
+
 func TestExecuteStepDirectly_PreservesIDs(t *testing.T) {
 	reg := NewRegistry("testns")
 	err := reg.RegisterGroup(&TestStepGroup{})
@@ -100,7 +110,7 @@ func TestExecuteStepDirectly_PreservesIDs(t *testing.T) {
 		Col1: inputCol,
 	}
 
-	outputAny := exec.ExecuteStepDirectly(t.Context(), "teststepgroup.somestep", nil, inputStruct)
+	outputAny := exec.ExecuteStepDirectly(t.Context(), "some_step", nil, inputStruct)
 	require.NotNil(t, outputAny)
 
 	output, ok := outputAny.(*TestOutput)
@@ -110,6 +120,31 @@ func TestExecuteStepDirectly_PreservesIDs(t *testing.T) {
 	assert.Equal(t, 2, output.Col2.Len())
 	assert.Equal(t, int64(12345), output.Col2.ID(0))
 	assert.Equal(t, int64(67890), output.Col2.ID(1))
+}
+
+func TestExecuteStepNoError(t *testing.T) {
+	reg := NewRegistry("testns")
+	err := reg.RegisterGroup(&TestStepGroup{})
+	require.NoError(t, err)
+
+	exec := NewExecutor(reg)
+
+	inputData := []string{"apple", "banana", "cherry"}
+	inputCol := pluginschema.NewCol(inputData)
+	inputStruct := &TestInput{
+		Col1: inputCol,
+	}
+
+	outputAny := exec.ExecuteStepDirectly(t.Context(), "some_step_no_error", nil, inputStruct)
+	require.NotNil(t, outputAny)
+
+	output, ok := outputAny.(*TestOutput)
+	require.True(t, ok)
+
+	assert.Equal(t, inputCol.Len(), output.Col2.Len())
+	assert.Equal(t, int64(5), output.Col2.Value(0))
+	assert.Equal(t, int64(6), output.Col2.Value(1))
+	assert.Equal(t, int64(6), output.Col2.Value(2))
 }
 
 type MyTestRow struct {
@@ -182,4 +217,3 @@ func TestBind_StructCol(t *testing.T) {
 	assert.Equal(t, "Charlie", ts.Rows.Value(0).Name)
 	assert.Equal(t, 40, ts.Rows.Value(0).Age)
 }
-

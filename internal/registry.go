@@ -366,7 +366,7 @@ func (r *schemaRegistry) RegisterGroup(group any) error {
 			continue
 		}
 
-		if methodType.NumIn() != 4 || methodType.NumOut() != 2 {
+		if methodType.NumIn() != 4 || (methodType.NumOut() != 1 && methodType.NumOut() != 2) {
 			continue
 		}
 
@@ -374,13 +374,16 @@ func (r *schemaRegistry) RegisterGroup(group any) error {
 		configType := methodType.In(2)
 		inputType := methodType.In(3)
 		outputType := methodType.Out(0)
-		errType := methodType.Out(1)
 
 		if !ctxType.Implements(reflect.TypeFor[context.Context]()) {
 			continue
 		}
-		if errType != reflect.TypeFor[error]() {
-			continue
+
+		if methodType.NumOut() == 2 {
+			errType := methodType.Out(1)
+			if errType != reflect.TypeFor[error]() {
+				continue
+			}
 		}
 
 		stepConfigSchema, err := extractResourceAndConfigSchema(configType)
@@ -388,8 +391,8 @@ func (r *schemaRegistry) RegisterGroup(group any) error {
 			return fmt.Errorf("step config schema for %s: %w", method.Name, err)
 		}
 
-		// Step name is only the method name in lowercase, independent of the struct name.
-		stepName := strings.ToLower(method.Name)
+		// Step name is converted from CamelCase/PascalCase to snake_case.
+		stepName := toSnakeCase(method.Name)
 
 		if inputType.Kind() != reflect.Pointer {
 			return fmt.Errorf("step %q input: must be a pointer type, got %s", stepName, inputType.String())
@@ -491,4 +494,28 @@ func NewRegistry(namespace string) Registry {
 		resources: make(map[string]resourceRegistration),
 		steps:     make(map[string]StepRegistration),
 	}
+}
+
+func toSnakeCase(str string) string {
+	var result strings.Builder
+	for i, r := range str {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			prev := str[i-1]
+			nextIsLower := false
+			if i+1 < len(str) {
+				next := str[i+1]
+				if next >= 'a' && next <= 'z' {
+					nextIsLower = true
+				}
+			}
+			prevIsLowerOrDigit := (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9')
+			prevIsUpper := prev >= 'A' && prev <= 'Z'
+
+			if prevIsLowerOrDigit || (prevIsUpper && nextIsLower) {
+				result.WriteByte('_')
+			}
+		}
+		result.WriteRune(r)
+	}
+	return strings.ToLower(result.String())
 }

@@ -357,7 +357,6 @@ func (r *schemaRegistry) RegisterGroup(group any) error {
 
 	// 2. Iterate over methods of *groupType to register Steps
 	ptrType := reflect.PointerTo(groupType)
-	structName := strings.ToLower(groupType.Name())
 
 	for i := 0; i < ptrType.NumMethod(); i++ {
 		method := ptrType.Method(i)
@@ -389,8 +388,8 @@ func (r *schemaRegistry) RegisterGroup(group any) error {
 			return fmt.Errorf("step config schema for %s: %w", method.Name, err)
 		}
 
-		// "baseado no nome da struct, so que tudo minisculo" -> structName.methodName in lowercase
-		stepName := fmt.Sprintf("%s.%s", structName, strings.ToLower(method.Name))
+		// Step name is only the method name in lowercase, independent of the struct name.
+		stepName := strings.ToLower(method.Name)
 
 		if inputType.Kind() != reflect.Pointer {
 			return fmt.Errorf("step %q input: must be a pointer type, got %s", stepName, inputType.String())
@@ -438,6 +437,12 @@ func (r *schemaRegistry) RegisterGroup(group any) error {
 		}
 
 		doc, code, file, line := extractMetadata(method.Func.Pointer())
+
+		if existing, conflict := r.steps[stepName]; conflict {
+			return fmt.Errorf("step %q already registered from %s (conflict with %s.%s)",
+				stepName, existing.SourceFile,
+				groupType.Name(), method.Name)
+		}
 
 		logger.L().Debug("Registering method step", zap.String("name", stepName))
 		r.steps[stepName] = StepRegistration{

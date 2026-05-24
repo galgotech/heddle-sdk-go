@@ -185,8 +185,8 @@ type TestRegistrationOutput struct {
 type MyTestGroup struct{}
 
 // MyDocComment is a test doc comment.
-func (s *MyTestGroup) MyTestStep(ctx context.Context, config struct{}, input *TestRegistrationInput) (*TestRegistrationOutput, error) {
-	return nil, nil
+func (s *MyTestGroup) MyTestStep(ctx context.Context, config struct{}, input *TestRegistrationInput) *TestRegistrationOutput {
+	return &TestRegistrationOutput{}
 }
 
 func TestRegisterStepMetadata(t *testing.T) {
@@ -198,15 +198,15 @@ func TestRegisterStepMetadata(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "MyDocComment is a test doc comment.\n", reg.Documentation)
 	assert.Contains(t, reg.SourceCode, "func (s *MyTestGroup) MyTestStep")
-	assert.Contains(t, reg.SourceCode, "return nil, nil")
+	assert.Contains(t, reg.SourceCode, "return &TestRegistrationOutput{}")
 	assert.Contains(t, reg.SourceFile, "plugin_test.go")
 }
 
 type AnotherGroup struct{}
 
 // AnotherGroup also defines MyTestStep — should conflict with MyTestGroup.
-func (s *AnotherGroup) MyTestStep(ctx context.Context, config struct{}, input *TestRegistrationInput) (*TestRegistrationOutput, error) {
-	return nil, nil
+func (s *AnotherGroup) MyTestStep(ctx context.Context, config struct{}, input *TestRegistrationInput) *TestRegistrationOutput {
+	return &TestRegistrationOutput{}
 }
 
 func TestRegisterDuplicateStepName(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/apache/arrow/go/v18/arrow"
@@ -59,28 +60,66 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 		}
 	}
 
-	structVal := targetStep.StructVal
+	// Create a new instance of the step group struct to act as the receiver,
+	// copying the registered structVal fields. This avoids concurrent execution conflicts.
+	receiverVal := reflect.New(targetStep.StructVal.Type())
+	receiverVal.Elem().Set(targetStep.StructVal)
 
 	// 2.1 Configure resource fields with their definitions from the worker
 	if len(request.Resources) > 0 {
-		// TODO: Get resource and start
 		for resourceReference, resourceDefinition := range request.Resources {
-			resource, ok := e.registry.GetResource(resourceDefinition.Type)
-			if ok {
-				if field := structVal.FieldByName(resourceReference); field.IsValid() {
-					// TODO: Implement ResourceAdmin in internalSchema
-					/*
-						if err := field.Addr().Interface().(internalschema.ResourceAdmin).Configure(resourceDefinition.Config); err != nil {
-							return baseplugin.ExecuteStepResponse{
-								TaskID:       request.TaskID,
-								Status:       baseplugin.StepResponseError,
-								ErrorMessage: fmt.Sprintf("failed to configure resource %s: %v", resourceReference, err),
-							}
-						}
-					*/
+			// Verify resource type exists in registry
+			_, ok := e.registry.GetResource(resourceDefinition.Type)
+			if !ok {
+				return baseplugin.ExecuteStepResponse{
+					TaskID:       request.TaskID,
+					Status:       baseplugin.StepResponseError,
+					ErrorMessage: fmt.Sprintf("resource type %s not registered", resourceDefinition.Type),
 				}
 			}
-			_ = resource
+
+			// Determine resource instance ID
+			resourceID := request.ResourceId
+			if resourceID == "" {
+				resourceID = resourceReference
+			}
+
+			// Initialize and retrieve the active resource instance
+			initializedRes, err := e.registry.InitializeResource(resourceID, resourceDefinition.Type, resourceDefinition.Config)
+			if err != nil {
+				return baseplugin.ExecuteStepResponse{
+					TaskID:       request.TaskID,
+					Status:       baseplugin.StepResponseError,
+					ErrorMessage: fmt.Sprintf("failed to initialize resource %s: %v", resourceReference, err),
+				}
+			}
+
+			// Inject the initialized resource into the receiver's field
+			field := receiverVal.Elem().FieldByName(resourceReference)
+			if !field.IsValid() {
+				// Fallback to case-insensitive lookup
+				for i := 0; i < receiverVal.Elem().NumField(); i++ {
+					f := receiverVal.Elem().Type().Field(i)
+					if strings.EqualFold(f.Name, resourceReference) {
+						field = receiverVal.Elem().Field(i)
+						break
+					}
+				}
+			}
+
+			if field.IsValid() {
+				if field.Addr().CanInterface() {
+					if setter, ok := field.Addr().Interface().(pluginschema.ResourceSetter); ok {
+						setter.SetResource(initializedRes)
+					} else {
+						return baseplugin.ExecuteStepResponse{
+							TaskID:       request.TaskID,
+							Status:       baseplugin.StepResponseError,
+							ErrorMessage: fmt.Sprintf("resource field %s does not implement ResourceSetter", resourceReference),
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -135,7 +174,7 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 		}()
 
 		args := []reflect.Value{
-			structVal,
+			receiverVal,
 			reflect.ValueOf(execCtx),
 			configVal,
 			inputVal,
@@ -279,7 +318,7 @@ func (e *stepExecutor) ExecuteStepDirectly(ctx context.Context, stepName string,
 			}
 		}()
 
-		configArg := configVal
+		configArg := configVal.Elem()
 		inputVal := reflect.ValueOf(input)
 		args := []reflect.Value{
 			receiverVal,

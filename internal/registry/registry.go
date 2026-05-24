@@ -33,6 +33,9 @@ type Registry interface {
 	AllSteps() map[string]StepRegistration
 	AllResources() map[string]ResourceRegistration
 	CloseAllResources()
+
+	GetResourceInstance(id string) (any, bool)
+	InitializeResource(id string, resourceType string, config map[string]any) (any, error)
 }
 
 type schemaRegistry struct {
@@ -321,6 +324,55 @@ func (r *schemaRegistry) GetResource(name string) (ResourceRegistration, bool) {
 	return res, ok
 }
 
+func (r *schemaRegistry) GetResourceInstance(id string) (any, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	inst, ok := r.resourceStates[id]
+	return inst, ok
+}
+
+func (r *schemaRegistry) InitializeResource(id string, resourceType string, config map[string]any) (any, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if inst, exists := r.resourceStates[id]; exists {
+		return inst, nil
+	}
+
+	reg, ok := r.resources[resourceType]
+	if !ok {
+		return nil, fmt.Errorf("resource type %q not registered", resourceType)
+	}
+
+	structPtrVal := reflect.New(reg.ResourceType.Elem())
+
+	configBytes, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal config: %w", err)
+	}
+	if len(config) > 0 {
+		if err := json.Unmarshal(configBytes, structPtrVal.Interface()); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal config into resource: %w", err)
+		}
+	}
+
+	inst, ok := structPtrVal.Interface().(pluginschema.ResourceDefinition)
+	if !ok {
+		return nil, fmt.Errorf("resource type %q does not implement ResourceDefinition", resourceType)
+	}
+
+	if err := inst.Init(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to initialize resource: %w", err)
+	}
+
+	if r.resourceStates == nil {
+		r.resourceStates = make(map[string]pluginschema.ResourceDefinition)
+	}
+	r.resourceStates[id] = inst
+
+	return inst, nil
+}
+
 func (r *schemaRegistry) AllSteps() map[string]StepRegistration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -342,19 +394,12 @@ func (r *schemaRegistry) AllResources() map[string]ResourceRegistration {
 }
 
 func (r *schemaRegistry) CloseAllResources() {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	for _, step := range r.steps {
-		v := step.StructVal
-		for _, field := range v.Fields() {
-			if internalschema.IsResource(field.Type()) {
-				method := field.Addr().MethodByName("Close")
-				if method.IsValid() {
-					method.Call(nil)
-				}
-			}
-		}
+	for id, inst := range r.resourceStates {
+		_ = inst.Close()
+		delete(r.resourceStates, id)
 	}
 }
 
@@ -436,7 +481,8 @@ func convertColSchemaToFrameSchema(cols []pluginschema.ColSchema) schema.FrameSc
 
 func NewRegistry() Registry {
 	return &schemaRegistry{
-		resources: make(map[string]ResourceRegistration),
-		steps:     make(map[string]StepRegistration),
+		resources:      make(map[string]ResourceRegistration),
+		steps:          make(map[string]StepRegistration),
+		resourceStates: make(map[string]pluginschema.ResourceDefinition),
 	}
 }

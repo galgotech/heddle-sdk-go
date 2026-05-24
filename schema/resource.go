@@ -9,6 +9,10 @@ type ResourceDefinition interface {
 	Close() error
 }
 
+type ResourceSetter interface {
+	SetResource(val any)
+}
+
 type Resource[T ResourceDefinition] struct {
 	resource T
 }
@@ -20,3 +24,8 @@ func (r Resource[T]) Get() T {
 func (r Resource[T]) IsResource() bool {
 	return true
 }
+
+func (r *Resource[T]) SetResource(val any) {
+	r.resource = val.(T)
+}
+

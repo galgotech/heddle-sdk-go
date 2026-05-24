@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -19,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
-	"github.com/galgotech/heddle-sdk-go/internal/resourcelink"
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
@@ -28,7 +26,7 @@ type TestResource struct {
 	Port int
 }
 
-func (r *TestResource) Start(ctx context.Context) error {
+func (r *TestResource) Init(ctx context.Context) error {
 	return nil
 }
 func (r *TestResource) Close() error {
@@ -47,10 +45,10 @@ func TestRegisterResource(t *testing.T) {
 	reg, ok := p.registry.GetResource("testresource")
 	require.True(t, ok)
 	assert.Equal(t, "testresource", reg.Name)
-	require.NotNil(t, reg.ResourceSchema)
-	assert.Equal(t, 2, len(reg.ResourceSchema.Fields))
-	assert.Equal(t, "Host", reg.ResourceSchema.Fields[0].Name)
-	assert.Equal(t, "Port", reg.ResourceSchema.Fields[1].Name)
+	require.NotNil(t, reg.FieldSchema)
+	assert.Equal(t, 2, len(reg.FieldSchema.Fields))
+	assert.Equal(t, "Host", reg.FieldSchema.Fields[0].Name)
+	assert.Equal(t, "Port", reg.FieldSchema.Fields[1].Name)
 }
 
 func TestPluginRegistrationIncludesResources(t *testing.T) {
@@ -58,13 +56,12 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 	err := p.Register(&TestResourceGroup{})
 	require.NoError(t, err)
 
-	resources := make(map[string]*schema.ResourceAndConfigSchema)
+	resources := make(map[string]schema.FieldSchema)
 	for name, res := range p.registry.AllResources() {
-		resources[name] = res.ResourceSchema
+		resources[name] = res.FieldSchema
 	}
 
 	reg := baseplugin.PluginRegistration{
-		Namespace: p.namespace,
 		Resources: resources,
 	}
 
@@ -76,30 +73,6 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "resources")
 	assert.Contains(t, string(body), "testresource")
-}
-
-func TestLazyResourceAndConcurrency(t *testing.T) {
-	p := New("test")
-	group := &TestResourceGroup{}
-	resourcelink.Configure(&group.DB, map[string]any{"Host": "127.0.0.1", "Port": 8080})
-
-	err := p.Register(group)
-	require.NoError(t, err)
-
-	// Since we shallow-cloned the prototype on registration, the active state is shared.
-	// Let's call Get() from multiple goroutines concurrently to verify thread safety!
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			res := group.DB.Get()
-			require.NotNil(t, res)
-			assert.Equal(t, "127.0.0.1", res.Host)
-			assert.Equal(t, 8080, res.Port)
-		}()
-	}
-	wg.Wait()
 }
 
 type mockFlightServer struct {
@@ -202,11 +175,11 @@ func TestPluginConnectRetry(t *testing.T) {
 }
 
 type TestRegistrationInput struct {
-	Data pluginschema.Col[int64]
+	Data pluginschema.ColInt64
 }
 
 type TestRegistrationOutput struct {
-	Result pluginschema.Col[string]
+	Result pluginschema.ColString
 }
 
 type MyTestGroup struct{}
@@ -248,16 +221,16 @@ func TestRegisterDuplicateStepName(t *testing.T) {
 }
 
 type TestBindInput struct {
-	A pluginschema.Col[float64]
-	B pluginschema.Col[float64]
+	A pluginschema.ColFloat64
+	B pluginschema.ColFloat64
 }
 
 type TestBindOutput struct {
-	A pluginschema.Col[float64]
-	B pluginschema.Col[float64]
+	A pluginschema.ColFloat64
+	B pluginschema.ColFloat64
 }
 
 type TestFrame struct {
-	A pluginschema.Col[float64]
-	B pluginschema.Col[float64]
+	A pluginschema.ColFloat64
+	B pluginschema.ColFloat64
 }

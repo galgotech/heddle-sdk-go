@@ -3,21 +3,21 @@ package plugin
 import (
 	"context"
 
-	"github.com/galgotech/heddle-sdk-go/internal"
+	"github.com/galgotech/heddle-sdk-go/internal/executor"
+	"github.com/galgotech/heddle-sdk-go/internal/network"
+	"github.com/galgotech/heddle-sdk-go/internal/registry"
 )
 
 type Plugin struct {
-	namespace string
-	language  string
-	Ready     chan struct{}
+	Ready chan struct{}
 
-	registry      internal.Registry
-	executor      internal.Executor
-	networkClient internal.NetworkClient
+	registry      registry.Registry
+	executor      executor.Executor
+	networkClient network.NetworkClient
 }
 
 func (p *Plugin) Register(group any) error {
-	return p.registry.RegisterGroup(group)
+	return p.registry.Register(group)
 }
 
 // Start initializes the plugin's lifecycle, establishing a resilient connection to the Worker.
@@ -35,17 +35,15 @@ func New(namespace string) *Plugin {
 	ready := make(chan struct{})
 	language := "go"
 
-	registry := internal.NewRegistry(namespace)
-	executor := internal.NewExecutor(registry)
-	networkClient := internal.NewNetworkClient(namespace, language, ready, registry, executor)
+	registry := registry.NewRegistry()
+	exec := executor.NewExecutor(registry)
+	networkClient := network.NewNetworkClient(namespace, language, ready, registry, exec)
 
 	p := &Plugin{
-		namespace:     namespace,
-		language:      language,
 		Ready:         ready,
 		registry:      registry,
 		networkClient: networkClient,
-		executor:      executor,
+		executor:      exec,
 	}
 
 	return p

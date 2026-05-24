@@ -1,4 +1,4 @@
-package internal
+package schema
 
 import (
 	"reflect"
@@ -11,14 +11,14 @@ import (
 )
 
 type SchemaTable struct {
-	ID     pluginschema.Col[int64]
-	Email  pluginschema.Col[string]
-	Active pluginschema.Col[bool]
+	ID     pluginschema.ColInt64
+	Email  pluginschema.ColString
+	Active pluginschema.ColBoolean
 }
 
 func TestExtractSchema(t *testing.T) {
 	// 1. Extract schema from struct
-	s, err := extractInputOutputSchema(reflect.TypeFor[*SchemaTable]())
+	s, err := ExtractInputOutputSchema(reflect.TypeFor[*SchemaTable]())
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
@@ -43,11 +43,11 @@ type MySubStruct struct {
 }
 
 type SchemaTableWithStruct struct {
-	Nested pluginschema.Col[MySubStruct]
+	Nested pluginschema.ColStruct[MySubStruct]
 }
 
 func TestExtractSchema_Struct(t *testing.T) {
-	s, err := extractInputOutputSchema(reflect.TypeFor[*SchemaTableWithStruct]())
+	s, err := ExtractInputOutputSchema(reflect.TypeFor[*SchemaTableWithStruct]())
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
@@ -63,7 +63,7 @@ func TestExtractConfigSchema(t *testing.T) {
 		Hidden  string `json:"-"`
 	}
 
-	s, err := extractResourceAndConfigSchema(reflect.TypeFor[ConfigTest]())
+	s, err := ExtractFieldSchema(reflect.TypeFor[ConfigTest]())
 	require.NoError(t, err)
 	require.NotNil(t, s)
 

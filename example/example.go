@@ -15,7 +15,7 @@ type Connection struct {
 	Host string
 }
 
-func (r *Connection) Start(ctx context.Context) error {
+func (r *Connection) Init(ctx context.Context) error {
 	return nil
 }
 
@@ -28,11 +28,19 @@ func (r *Connection) query(ctx context.Context, query string) ([]int64, error) {
 }
 
 type TableInput struct {
-	Query schema.Col[string]
+	Query *schema.ColString
+}
+
+type TestOutput struct {
+	Test  *schema.ColString
+	Test2 *schema.ColString
 }
 
 type TableOutput struct {
-	RowsAffected schema.Col[int64]
+	RowsAffected   *schema.ColInt64
+	DataTest       *schema.ColInt64
+	DataTest2      *schema.ColInt64
+	MultipleStrucs *schema.ColStruct[TestOutput]
 }
 
 type Config struct {
@@ -44,7 +52,7 @@ type Steps struct {
 	DB         schema.Resource[*Connection]
 }
 
-func (s *Steps) ResolveInput(ctx context.Context, config Config, stepName string) ([]schema.ColSchema, error) {
+func (s *Steps) ResolveTypeInput(ctx context.Context, config Config, stepName string) ([]schema.ColSchema, error) {
 	return []schema.ColSchema{
 		{
 			Type: "string",
@@ -53,7 +61,7 @@ func (s *Steps) ResolveInput(ctx context.Context, config Config, stepName string
 	}, nil
 }
 
-func (s *Steps) ResolveOutput(ctx context.Context, config Config, stepName string) ([]schema.ColSchema, error) {
+func (s *Steps) ResolveTypeOutput(ctx context.Context, config Config, stepName string) ([]schema.ColSchema, error) {
 	return []schema.ColSchema{
 		{
 			Type: "int64",
@@ -67,8 +75,21 @@ func (s *Steps) Step1(ctx context.Context, config Config, in *TableInput) (*Tabl
 	if err != nil {
 		return nil, err
 	}
+
+	t := []*TestOutput{
+		{
+			Test:  schema.NewColString([]string{"123"}),
+			Test2: schema.NewColString([]string{"123"}),
+		},
+		{
+			Test:  schema.NewColString([]string{"123"}),
+			Test2: schema.NewColString([]string{"123"}),
+		},
+	}
+
 	output := &TableOutput{
-		RowsAffected: schema.NewCol(data),
+		RowsAffected:   schema.NewColInt64(data),
+		MultipleStrucs: schema.NewColStruct(t),
 	}
 	return output, nil
 }
@@ -79,8 +100,9 @@ func (s *Steps) Step2(ctx context.Context, config Config, in *schema.Any) (*sche
 		return nil, err
 	}
 
-	output := &schema.Any{}
-	output.Set("RowsAffected", schema.NewCol(data))
+	output := schema.NewAny(map[string]any{
+		"RowsAffected": data,
+	})
 	return output, nil
 }
 
@@ -101,15 +123,7 @@ func Start() {
 func Run() {
 	p := plugin.New("ns1")
 
-	steps := &Steps{
-		OtherValue: "123",
-		DB: schema.Resource[*Connection]{
-			Resource: &Connection{
-				Host: "localhost:5432",
-			},
-		},
-	}
-
+	steps := &Steps{}
 	err := p.Register(steps)
 	if err != nil {
 		logger.L().Error("Failed to register steps", zap.Error(err))
@@ -119,7 +133,7 @@ func Run() {
 		Query: "select 1",
 	}
 	input := TableInput{
-		Query: schema.NewCol([]string{"123"}),
+		Query: schema.NewColString([]string{"123"}),
 	}
 
 	ctx := context.Background()

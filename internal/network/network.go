@@ -1,4 +1,4 @@
-package internal
+package network
 
 import (
 	"context"
@@ -19,6 +19,8 @@ import (
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
 	heddleruntime "github.com/galgotech/heddle-lang/pkg/runtime"
 	"github.com/galgotech/heddle-lang/pkg/schema"
+	"github.com/galgotech/heddle-sdk-go/internal/executor"
+	"github.com/galgotech/heddle-sdk-go/internal/registry"
 )
 
 type NetworkClient interface {
@@ -29,8 +31,8 @@ type flightNetworkClient struct {
 	namespace string
 	language  string
 	ready     chan struct{}
-	registry  Registry
-	executor  Executor
+	registry  registry.Registry
+	executor  executor.Executor
 }
 
 // Start initializes the plugin's lifecycle, establishing a resilient connection to the Worker.
@@ -73,11 +75,9 @@ func (nc *flightNetworkClient) Start(ctx context.Context) error {
 		allResources := nc.registry.AllResources()
 
 		logger.L().Info("Preparing plugin registration", zap.Int("steps", len(allSteps)), zap.Int("resources", len(allResources)))
-		capabilities := make([]string, 0, len(allSteps)+len(allResources))
 		schemas := make(map[string]schema.StepSchemas)
 		for name, step := range allSteps {
 			capName := fmt.Sprintf("%s.%s", nc.namespace, name)
-			capabilities = append(capabilities, capName)
 			schemas[capName] = schema.StepSchemas{
 				Config:        step.ConfigSchema,
 				Input:         step.InputSchema,
@@ -89,24 +89,19 @@ func (nc *flightNetworkClient) Start(ctx context.Context) error {
 			}
 		}
 
-		for name := range allResources {
-			capabilities = append(capabilities, fmt.Sprintf("%s.resource.%s", nc.namespace, name))
-		}
-
-		resources := make(map[string]*schema.ResourceAndConfigSchema)
+		resources := make(map[string]schema.FieldSchema)
 		for name, res := range allResources {
-			resources[name] = res.ResourceSchema
+			resources[name] = res.FieldSchema
 		}
 
-		reg := baseplugin.PluginRegistration{
-			Namespace:    nc.namespace,
-			Language:     nc.language,
-			Version:      "0.1.0",
-			Capabilities: capabilities,
-			Schemas:      schemas,
-			Resources:    resources,
+		registration := baseplugin.PluginRegistration{
+			Namespace: nc.namespace,
+			Language:  nc.language,
+			Version:   "0.1.0",
+			Schemas:   schemas,
+			Resources: resources,
 		}
-		regBody, err := json.Marshal(reg)
+		registrationBody, err := json.Marshal(registration)
 		if err != nil {
 			logger.L().Info("Failed to marshal plugin registration...", zap.String("target", target))
 			return err
@@ -116,7 +111,7 @@ func (nc *flightNetworkClient) Start(ctx context.Context) error {
 		// This notifies the Worker of the plugin's namespace and step capabilities.
 		res, err := client.DoAction(ctx, &flight.Action{
 			Type: baseplugin.ActionRegisterPlugin,
-			Body: regBody,
+			Body: registrationBody,
 		})
 		if err != nil {
 			logger.L().Info("Retrying plugin registration...", zap.String("target", target))
@@ -144,9 +139,8 @@ func (nc *flightNetworkClient) Start(ctx context.Context) error {
 		}
 
 		logger.L().Info("Plugin registered", zap.String("namespace", nc.namespace))
-		logger.L().Debug("Plugin registered", zap.String("capabilities", fmt.Sprintf("%v", reg.Capabilities)))
-		logger.L().Debug("Plugin registered", zap.String("resources", fmt.Sprintf("%v", reg.Resources)))
-		logger.L().Debug("Plugin registered", zap.String("schemas", fmt.Sprintf("%v", reg.Schemas)))
+		logger.L().Debug("Plugin registered", zap.String("resources", fmt.Sprintf("%v", registration.Resources)))
+		logger.L().Debug("Plugin registered", zap.String("schemas", fmt.Sprintf("%v", registration.Schemas)))
 
 		// 1.3 Start Heartbeat and Execution Loop
 		// We use a separate context for each connection session
@@ -227,24 +221,24 @@ func (nc *flightNetworkClient) startExecutionLoop(ctx context.Context, client fl
 			return fmt.Errorf("exchange stream closed: %w", err)
 		}
 
-		var req baseplugin.ExecuteStepRequest
-		if err := json.Unmarshal(data.DataBody, &req); err != nil {
+		var request baseplugin.ExecuteStepRequest
+		if err := json.Unmarshal(data.DataBody, &request); err != nil {
 			logger.L().Error("Failed to unmarshal request", zap.Error(err))
 			continue
 		}
 
 		// Execute task in a goroutine
 		go func(r baseplugin.ExecuteStepRequest) {
-			resp := nc.executor.ExecuteTask(ctx, r)
-			respBody, err := json.Marshal(resp)
+			response := nc.executor.ExecuteTask(ctx, r)
+			responseBody, err := json.Marshal(response)
 			if err != nil {
 				logger.L().Error("Failed to unmarshal response", zap.Error(err))
 				return
 			}
-			if err := stream.Send(&flight.FlightData{DataBody: respBody}); err != nil {
+			if err := stream.Send(&flight.FlightData{DataBody: responseBody}); err != nil {
 				logger.L().Error("Failed to send response", zap.Error(err))
 			}
-		}(req)
+		}(request)
 	}
 }
 
@@ -252,8 +246,8 @@ func NewNetworkClient(
 	namespace string,
 	language string,
 	ready chan struct{},
-	reg Registry,
-	exec Executor,
+	reg registry.Registry,
+	exec executor.Executor,
 ) NetworkClient {
 	return &flightNetworkClient{
 		namespace: namespace,

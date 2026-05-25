@@ -1,6 +1,8 @@
 package schema
 
 import (
+	"iter"
+
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
 	"github.com/apache/arrow/go/v18/arrow/memory"
@@ -66,6 +68,17 @@ func (c *Col[T, K]) GetIDs(accessor.Token) *array.Int64 {
 
 func (c Col[T, K]) Value(i int) K {
 	return any(c.arr).(hasValue[K]).Value(i)
+}
+
+// All returns an iterator to be used with standard 'for i, e := range' loops.
+func (c Col[T, K]) All() iter.Seq2[int, K] {
+	return func(yield func(int, K) bool) {
+		for i := 0; i < c.Len(); i++ {
+			if !yield(i, c.Value(i)) {
+				return
+			}
+		}
+	}
 }
 
 func newCol[T heddleType, K goTypes](arr arrow.Array) *Col[T, K] {

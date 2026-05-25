@@ -27,4 +27,14 @@ func TestCol(t *testing.T) {
 	assert.NotEqual(t, ids.Value(0), ids.Value(1))
 	assert.NotEqual(t, ids.Value(1), ids.Value(2))
 	assert.NotEqual(t, ids.Value(0), ids.Value(2))
+
+	// Test range-over-function via All()
+	var iteratedValues []string
+	var iteratedIndices []int
+	for i, e := range col.All() {
+		iteratedIndices = append(iteratedIndices, i)
+		iteratedValues = append(iteratedValues, e)
+	}
+	assert.Equal(t, []int{0, 1, 2}, iteratedIndices)
+	assert.Equal(t, data, iteratedValues)
 }

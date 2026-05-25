@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 
 	"github.com/galgotech/heddle-sdk-go/internal/executor"
 	"github.com/galgotech/heddle-sdk-go/internal/network"
@@ -28,6 +30,35 @@ func (p *Plugin) Start() error {
 // ExecuteStepDirectly executes a registered step directly/locally (without starting gRPC/Arrow Flight, without SHM)
 func (p *Plugin) Execute(ctx context.Context, stepName string, configJSON any, input any) any {
 	return p.executor.ExecuteStepDirectly(ctx, stepName, configJSON, input)
+}
+
+func (p *Plugin) ResourceInstance(id string, resourceType string, config any) error {
+	var configMap map[string]any
+	switch cfg := config.(type) {
+	case map[string]any:
+		configMap = cfg
+	case map[string]string:
+		configMap = make(map[string]any)
+		for k, v := range cfg {
+			configMap[k] = v
+		}
+	default:
+		// Fallback to JSON round-trip
+		bytes, err := json.Marshal(config)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(bytes, &configMap); err != nil {
+			return err
+		}
+	}
+
+	_, err := p.registry.InitializeResource(id, strings.ToLower(resourceType), configMap)
+	return err
+}
+
+func (p *Plugin) ResourceSet(fieldName string, instanceID string) {
+	p.registry.SetResourceBinding(fieldName, instanceID)
 }
 
 // New creates a new Heddle Plugin instance within the specified namespace.

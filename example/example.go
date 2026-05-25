@@ -11,107 +11,77 @@ import (
 	"github.com/galgotech/heddle-sdk-go/schema"
 )
 
+// Connection represents the `pg.connection` resource definition.
 type Connection struct {
 	Host string
 }
 
 func (r *Connection) Init(ctx context.Context) error {
+	logger.L().Info("Initializing PostgreSQL Connection resource", zap.String("host", r.Host))
 	return nil
 }
 
 func (r *Connection) Close() error {
+	logger.L().Info("Closing PostgreSQL Connection resource", zap.String("host", r.Host))
 	return nil
 }
 
-func (r *Connection) query(ctx context.Context, query string) ([]int64, error) {
-	return []int64{1}, nil
+// QueryConfig represents the step configuration (`query` parameter in Heddle Step pg.query).
+type QueryConfig struct {
+	Query string `json:"query"`
 }
 
-type TableInput struct {
-	Query *schema.ColString
+// QueryInput represents the input columnar structure containing inputs like `@user_id`.
+type QueryInput struct {
+	UserID *schema.ColString
 }
 
-type TestOutput struct {
-	Test  *schema.ColString
-	Test2 *schema.ColString
+// QueryOutput represents the returned output frame schemas.
+type QueryOutput struct {
+	UserID  *schema.ColInt64
+	Country *schema.ColString
 }
 
-type TableOutput struct {
-	RowsAffected   *schema.ColInt64
-	DataTest       *schema.ColInt64
-	DataTest2      *schema.ColInt64
-	MultipleStrucs *schema.ColStruct[TestOutput]
-}
-
-type Config struct {
-	Query string
-}
-
+// Steps groups all step methods and binds stateful resources.
 type Steps struct {
-	OtherValue string
-	DB         schema.Resource[*Connection]
+	DB schema.Resource[*Connection]
 }
 
-func (s *Steps) ResolveTypeInput(ctx context.Context, config Config, stepName string) ([]schema.ColSchema, error) {
-	return []schema.ColSchema{
-		{
-			Type: "string",
-			Name: "Query",
-		},
-	}, nil
-}
-
-func (s *Steps) ResolveTypeOutput(ctx context.Context, config Config, stepName string) ([]schema.ColSchema, error) {
-	return []schema.ColSchema{
-		{
-			Type: "int64",
-			Name: "RowsAffected",
-		},
-	}, nil
-}
-
-func (s *Steps) Step1(ctx context.Context, config Config, in *TableInput) (*TableOutput, error) {
-	data, err := s.DB.Get().query(ctx, config.Query)
-	if err != nil {
-		return nil, err
+// Query implements the `pg.query` step behavior.
+func (s *Steps) Query(ctx context.Context, config QueryConfig, in *QueryInput) *QueryOutput {
+	conn := s.DB.Get()
+	if conn == nil {
+		logger.L().Error("PostgreSQL connection DB resource is not initialized or bound!")
+		return &QueryOutput{}
 	}
 
-	t := []*TestOutput{
-		{
-			Test:  schema.NewColString([]string{"123"}),
-			Test2: schema.NewColString([]string{"123"}),
-		},
-		{
-			Test:  schema.NewColString([]string{"123"}),
-			Test2: schema.NewColString([]string{"123"}),
-		},
+	numRows := in.UserID.Len()
+	userIDs := make([]int64, numRows)
+	countries := make([]string, numRows)
+
+	for i := 0; i < numRows; i++ {
+		idStr := in.UserID.Value(i)
+		var id int64
+		_, _ = fmt.Sscan(idStr, &id)
+		if id == 0 {
+			id = int64(i + 1)
+		}
+		userIDs[i] = id
+		// Map connection host to mock country for demo
+		countries[i] = fmt.Sprintf("US (resolved via %s)", conn.Host)
 	}
 
-	output := &TableOutput{
-		RowsAffected:   schema.NewColInt64(data),
-		MultipleStrucs: schema.NewColStruct(t),
+	return &QueryOutput{
+		UserID:  schema.NewColInt64(userIDs),
+		Country: schema.NewColString(countries),
 	}
-	return output, nil
 }
 
-func (s *Steps) Step2(ctx context.Context, config Config, in *schema.Any) (*schema.Any, error) {
-	data, err := s.DB.Get().query(ctx, config.Query)
-	if err != nil {
-		return nil, err
-	}
-
-	output := schema.NewAny(map[string]any{
-		"RowsAffected": data,
-	})
-	return output, nil
-}
-
+// Start registers step dependencies and boots up standard network/gRPC Worker coordination.
 func Start() {
-	p := plugin.New("ns1")
+	p := plugin.New("pg")
 
-	steps := &Steps{
-		OtherValue: "123",
-	}
+	steps := &Steps{}
 	err := p.Register(steps)
 	if err != nil {
 		logger.L().Error("Failed to register steps", zap.Error(err))
@@ -120,8 +90,9 @@ func Start() {
 	go p.Start()
 }
 
+// Run executes the processing flow locally in-process without worker daemon dependencies.
 func Run() {
-	p := plugin.New("ns1")
+	p := plugin.New("pg")
 
 	steps := &Steps{}
 	err := p.Register(steps)
@@ -129,14 +100,31 @@ func Run() {
 		logger.L().Error("Failed to register steps", zap.Error(err))
 	}
 
-	c := Config{
-		Query: "select 1",
+	// resource test = pg.connection { host: "pg.internal" }
+	configResource := map[string]string{"host": "pg.internal"}
+	err = p.ResourceInstance("test", "Connection", configResource)
+	if err != nil {
+		logger.L().Error("Failed to create resource instance", zap.Error(err))
 	}
-	input := TableInput{
-		Query: schema.NewColString([]string{"123"}),
+
+	// step fetch_user_data = <DB=test> ...
+	p.ResourceSet("DB", "test")
+
+	// pg.query { query: "SELECT id AS user_id, country FROM users WHERE id = @user_id" }
+	c := QueryConfig{
+		Query: "SELECT id AS user_id, country FROM users WHERE id = @user_id",
+	}
+	input := QueryInput{
+		UserID: schema.NewColString([]string{"123", "456"}),
 	}
 
 	ctx := context.Background()
-	output := p.Execute(ctx, "step1", c, input)
-	fmt.Println(output)
+	output := p.Execute(ctx, "query", c, &input)
+	fmt.Printf("\n--- Step Direct Execution Result ---\n")
+	if out, ok := output.(*QueryOutput); ok {
+		for i := 0; i < out.UserID.Len(); i++ {
+			fmt.Printf("Row %d: UserID=%d, Country=%s\n", i, out.UserID.Value(i), out.Country.Value(i))
+		}
+	}
+	fmt.Printf("-------------------------------------\n\n")
 }

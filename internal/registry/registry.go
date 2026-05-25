@@ -36,13 +36,16 @@ type Registry interface {
 
 	GetResourceInstance(id string) (any, bool)
 	InitializeResource(id string, resourceType string, config map[string]any) (any, error)
+	SetResourceBinding(fieldName string, instanceID string)
+	GetResourceBinding(fieldName string) (string, bool)
 }
 
 type schemaRegistry struct {
-	resourceStates map[string]pluginschema.ResourceDefinition
-	resources      map[string]ResourceRegistration
-	steps          map[string]StepRegistration
-	mu             sync.RWMutex
+	resourceStates   map[string]pluginschema.ResourceDefinition
+	resources        map[string]ResourceRegistration
+	steps            map[string]StepRegistration
+	resourceBindings map[string]string
+	mu               sync.RWMutex
 }
 
 func (r *schemaRegistry) Register(instance any) error {
@@ -479,10 +482,37 @@ func convertColSchemaToFrameSchema(cols []pluginschema.ColSchema) schema.FrameSc
 	}
 }
 
+func (r *schemaRegistry) SetResourceBinding(fieldName string, instanceID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resourceBindings == nil {
+		r.resourceBindings = make(map[string]string)
+	}
+	r.resourceBindings[fieldName] = instanceID
+}
+
+func (r *schemaRegistry) GetResourceBinding(fieldName string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.resourceBindings == nil {
+		return "", false
+	}
+	if id, ok := r.resourceBindings[fieldName]; ok {
+		return id, true
+	}
+	for k, v := range r.resourceBindings {
+		if strings.EqualFold(k, fieldName) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 func NewRegistry() Registry {
 	return &schemaRegistry{
-		resources:      make(map[string]ResourceRegistration),
-		steps:          make(map[string]StepRegistration),
-		resourceStates: make(map[string]pluginschema.ResourceDefinition),
+		resources:        make(map[string]ResourceRegistration),
+		steps:            make(map[string]StepRegistration),
+		resourceStates:   make(map[string]pluginschema.ResourceDefinition),
+		resourceBindings: make(map[string]string),
 	}
 }

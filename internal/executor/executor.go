@@ -66,7 +66,7 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 	receiverVal.Elem().Set(targetStep.StructVal)
 
 	// 2.1 Configure resource fields with their definitions from the worker
-	if len(request.Resources) > 0 {
+	if request.ResourceId != "" && len(request.Resources) > 0 {
 		for resourceReference, resourceDefinition := range request.Resources {
 			// Verify resource type exists in registry
 			_, ok := e.registry.GetResource(resourceDefinition.Type)
@@ -80,9 +80,6 @@ func (e *stepExecutor) ExecuteTask(ctx context.Context, request baseplugin.Execu
 
 			// Determine resource instance ID
 			resourceID := request.ResourceId
-			if resourceID == "" {
-				resourceID = resourceReference
-			}
 
 			// Initialize and retrieve the active resource instance
 			initializedRes, err := e.registry.InitializeResource(resourceID, resourceDefinition.Type, resourceDefinition.Config)
@@ -302,8 +299,23 @@ func (e *stepExecutor) ExecuteStepDirectly(ctx context.Context, stepName string,
 	receiverVal := reflect.New(step.StructVal.Type())
 	receiverVal.Elem().Set(step.StructVal)
 
-	// No central resource injection required for local execution anymore,
-	// as resources manage their own lifecycle and configurations.
+	// Inject bound resources into the receiver's fields for direct/local execution
+	for i := 0; i < receiverVal.Elem().NumField(); i++ {
+		fieldType := receiverVal.Elem().Type().Field(i)
+		if internalschema.IsResource(fieldType.Type) {
+			fieldName := fieldType.Name
+			if instID, bound := e.registry.GetResourceBinding(fieldName); bound {
+				if inst, exists := e.registry.GetResourceInstance(instID); exists {
+					field := receiverVal.Elem().Field(i)
+					if field.Addr().CanInterface() {
+						if setter, ok := field.Addr().Interface().(pluginschema.ResourceSetter); ok {
+							setter.SetResource(inst)
+						}
+					}
+				}
+			}
+		}
+	}
 
 	// Call the step function with Panic Recovery.
 	var results []reflect.Value

@@ -2,9 +2,11 @@ package execute
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
@@ -321,3 +323,184 @@ func ExtractOutputArrays(outVal any, step registry.StepRegistration) map[string]
 
 	return columns
 }
+
+type ExecutionRequest struct {
+	StepName  string
+	Config    any                    // Raw config JSON string or direct struct/map
+	Resources map[string]any         // resolved resource instances
+	Columns   map[string]arrow.Array // arrow arrays
+	RawInput  any                    // raw struct input (fallback)
+}
+
+type ExecutionResult struct {
+	Data    any
+	Columns map[string]arrow.Array
+}
+
+// UnifiedExecute runs a step execution end-to-end.
+func UnifiedExecute(ctx context.Context, reg registry.Registry, req ExecutionRequest) (*ExecutionResult, error) {
+	// 1. Resolve step
+	step, ok := reg.GetStep(req.StepName)
+	if !ok {
+		return nil, fmt.Errorf("step not found: %s", req.StepName)
+	}
+
+	// 2. Hydrate config
+	configVal, err := HydrateConfig(step, req.Config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate config: %w", err)
+	}
+
+	// 3. Prepare receiver
+	receiverVal := reflect.New(step.StructVal.Type())
+	receiverVal.Elem().Set(step.StructVal)
+
+	// 4. Inject resources
+	if len(req.Resources) > 0 {
+		for resourceReference, initializedRes := range req.Resources {
+			// Inject the initialized resource into the receiver's field
+			field := receiverVal.Elem().FieldByName(resourceReference)
+			if !field.IsValid() {
+				// Fallback to case-insensitive lookup
+				for i := 0; i < receiverVal.Elem().NumField(); i++ {
+					f := receiverVal.Elem().Type().Field(i)
+					if strings.EqualFold(f.Name, resourceReference) {
+						field = receiverVal.Elem().Field(i)
+						break
+					}
+				}
+			}
+
+			if field.IsValid() {
+				if field.Addr().CanInterface() {
+					if setter, ok := field.Addr().Interface().(schema.ResourceSetter); ok {
+						setter.SetResource(initializedRes)
+					} else {
+						return nil, fmt.Errorf("resource field %s does not implement ResourceSetter", resourceReference)
+					}
+				}
+			}
+		}
+	}
+
+	// 5. Prepare input
+	var inputVal reflect.Value
+	if req.RawInput != nil {
+		inputVal = reflect.ValueOf(req.RawInput)
+	} else {
+		inputVal, err = PrepareInputVal(step, req.Columns)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// 6. Execution with Context Timeout & Panic Recovery
+	execCtx := ctx
+	var cancel context.CancelFunc
+	if _, ok := execCtx.Deadline(); !ok {
+		execCtx, cancel = context.WithTimeout(ctx, 15*time.Minute)
+		defer cancel()
+	}
+
+	var results []reflect.Value
+	var stepPanicked bool
+	var panicVal any
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				stepPanicked = true
+				panicVal = r
+			}
+		}()
+
+		configArg := configVal
+		if configArg.Kind() == reflect.Pointer {
+			configArg = configArg.Elem()
+		}
+
+		args := []reflect.Value{
+			receiverVal,
+			reflect.ValueOf(execCtx),
+			configArg,
+			inputVal,
+		}
+		results = step.Func.Call(args)
+	}()
+
+	if stepPanicked {
+		return nil, fmt.Errorf("panic: %v", panicVal)
+	}
+
+	// 7. Output processing
+	var outVal any
+	if len(results) > 0 {
+		vVal := results[0]
+		if vVal.Kind() == reflect.Pointer {
+			if vVal.IsNil() {
+				if step.OutputType == reflect.TypeFor[*schema.Void]() {
+					return &ExecutionResult{
+						Data:    nil,
+						Columns: make(map[string]arrow.Array),
+					}, nil
+				}
+				return nil, fmt.Errorf("step execution returned nil pointer for expected output")
+			}
+		}
+		outVal = results[0].Interface()
+	}
+
+	columns := ExtractOutputArrays(outVal, step)
+
+	return &ExecutionResult{
+		Data:    outVal,
+		Columns: columns,
+	}, nil
+}
+
+func HydrateConfig(step registry.StepRegistration, config any) (reflect.Value, error) {
+	configVal := reflect.New(step.ConfigType)
+	if config != nil {
+		if str, ok := config.(string); ok {
+			if str != "" {
+				if err := json.Unmarshal([]byte(str), configVal.Interface()); err != nil {
+					return reflect.Value{}, err
+				}
+			}
+		} else {
+			cfgVal := reflect.ValueOf(config)
+			if cfgVal.Type() == step.ConfigType {
+				configVal.Elem().Set(cfgVal)
+			} else if cfgVal.Type() == reflect.PointerTo(step.ConfigType) && !cfgVal.IsNil() {
+				configVal.Elem().Set(cfgVal.Elem())
+			} else {
+				data, err := json.Marshal(config)
+				if err == nil {
+					_ = json.Unmarshal(data, configVal.Interface())
+				}
+			}
+		}
+	}
+	return configVal, nil
+}
+
+func PrepareInputVal(step registry.StepRegistration, columns map[string]arrow.Array) (reflect.Value, error) {
+	var inputVal reflect.Value
+	if step.InputType == reflect.TypeFor[*schema.Any]() {
+		if len(columns) > 0 {
+			inputVal = reflect.ValueOf(schema.NewAnyAccessor(accessor.Token{}, columns))
+		} else {
+			inputVal = reflect.Zero(step.InputType)
+		}
+	} else if step.InputType != nil && step.InputType.Kind() == reflect.Pointer {
+		inputVal = reflect.New(step.InputType.Elem())
+		if len(columns) > 0 {
+			err := Bind(inputVal, step.InputFieldsIndex, columns)
+			if err != nil {
+				return reflect.Value{}, fmt.Errorf("failed to bind input frame: %w", err)
+			}
+		}
+	}
+	return inputVal, nil
+}
+

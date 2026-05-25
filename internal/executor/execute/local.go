@@ -2,20 +2,16 @@ package execute
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
-	"reflect"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/galgotech/heddle-lang/pkg/logger"
 	"go.uber.org/zap"
 
-	"github.com/galgotech/heddle-sdk-go/internal/accessor"
 	"github.com/galgotech/heddle-sdk-go/internal/executor/history"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
 	internalschema "github.com/galgotech/heddle-sdk-go/internal/schema"
-	"github.com/galgotech/heddle-sdk-go/schema"
 )
 
 type localExecutor struct {
@@ -46,143 +42,67 @@ func (e *localExecutor) Execute(ctx context.Context, input any) (any, error) {
 		return nil, fmt.Errorf("step not found: %s", stepName)
 	}
 
-	configVal := reflect.New(step.ConfigType)
-	if configJSON != nil {
-		cfgVal := reflect.ValueOf(configJSON)
-		if cfgVal.Type() == step.ConfigType {
-			configVal.Elem().Set(cfgVal)
-		} else if cfgVal.Type() == reflect.PointerTo(step.ConfigType) && !cfgVal.IsNil() {
-			configVal.Elem().Set(cfgVal.Elem())
-		} else {
-			data, err := json.Marshal(configJSON)
-			if err == nil {
-				_ = json.Unmarshal(data, configVal.Interface())
-			}
-		}
-	}
-
-	receiverVal := reflect.New(step.StructVal.Type())
-	receiverVal.Elem().Set(step.StructVal)
-
-	// Inject bound resources into the receiver's fields for direct/local execution
-	for i := 0; i < receiverVal.Elem().NumField(); i++ {
-		fieldType := receiverVal.Elem().Type().Field(i)
+	// 1. Resolve resources from local bindings
+	resources := make(map[string]any)
+	t := step.StructVal.Type()
+	for i := 0; i < t.NumField(); i++ {
+		fieldType := t.Field(i)
 		if internalschema.IsResource(fieldType.Type) {
 			fieldName := fieldType.Name
 			if instID, bound := e.registry.GetResourceBinding(fieldName); bound {
 				if inst, exists := e.registry.GetResourceInstance(instID); exists {
-					field := receiverVal.Elem().Field(i)
-					if field.Addr().CanInterface() {
-						if setter, ok := field.Addr().Interface().(schema.ResourceSetter); ok {
-							setter.SetResource(inst)
-						}
-					}
+					resources[fieldName] = inst
 				}
 			}
 		}
 	}
 
-	var inputVal reflect.Value
+	// 2. Resolve columns or raw input
+	var columns map[string]arrow.Array
+	var rawInput any
 	var isRef bool
-	var refObj *StepReference
 
 	if innerInput != nil {
-		refObj, isRef = innerInput.(*StepReference)
-	}
-
-	if isRef {
-		if step.InputType == reflect.TypeFor[*schema.Any]() {
-			if len(refObj.Columns) > 0 {
-				columns := make(map[string]arrow.Array)
-				for k, v := range refObj.Columns {
-					columns[k] = v
-				}
-
-				inputVal = reflect.ValueOf(schema.NewAnyAccessor(accessor.Token{}, columns))
-			} else {
-				inputVal = reflect.Zero(step.InputType)
-			}
-		} else if step.InputType != nil && step.InputType.Kind() == reflect.Pointer {
-			inputVal = reflect.New(step.InputType.Elem())
-			bindMap := make(map[string]arrow.Array)
-			maps.Copy(bindMap, refObj.Columns)
-
-			if len(bindMap) > 0 {
-				err := Bind(inputVal, step.InputFieldsIndex, bindMap)
-				if err != nil {
-					logger.L().Fatal("failed to bind input frame from StepReference", zap.Error(err))
-				}
-			}
-		}
-	} else if innerInput == nil {
-		// Auto chaining from simulated SHM history
-		shm := e.localHistory.GetSimulatedSHM()
-		if step.InputType == reflect.TypeFor[*schema.Any]() {
-			if len(shm) > 0 {
-				columns := make(map[string]arrow.Array)
-				for k, v := range shm {
-					columns[k] = v
-				}
-				inputVal = reflect.ValueOf(schema.NewAnyAccessor(accessor.Token{}, columns))
-			} else {
-				inputVal = reflect.Zero(step.InputType)
-			}
-
-		} else if step.InputType != nil && step.InputType.Kind() == reflect.Pointer {
-			inputVal = reflect.New(step.InputType.Elem())
-			if len(shm) > 0 {
-				err := Bind(inputVal, step.InputFieldsIndex, shm)
-				if err != nil {
-					logger.L().Fatal("failed to bind input frame", zap.Error(err))
-				}
-			}
+		if refObj, ok := innerInput.(*StepReference); ok {
+			isRef = true
+			columns = make(map[string]arrow.Array)
+			maps.Copy(columns, refObj.Columns)
+		} else {
+			rawInput = innerInput
 		}
 	} else {
-		inputVal = reflect.ValueOf(innerInput)
+		// Auto chaining from simulated SHM history
+		shm := e.localHistory.GetSimulatedSHM()
+		columns = make(map[string]arrow.Array)
+		maps.Copy(columns, shm)
 	}
 
-	// Call the step function with Panic Recovery.
-	var results []reflect.Value
-	var stepPanicked bool
-	var panicVal any
-
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				stepPanicked = true
-				panicVal = r
-			}
-		}()
-
-		configArg := configVal.Elem()
-		args := []reflect.Value{
-			receiverVal,
-			reflect.ValueOf(ctx),
-			configArg,
-			inputVal,
-		}
-		results = step.Func.Call(args)
-	}()
-
-	if stepPanicked {
-		logger.L().Fatal("step panicked", zap.String("stepName", stepName), zap.Any("panicVal", panicVal))
-		return nil, fmt.Errorf("panic: %v", panicVal)
+	// 3. Execute using UnifiedExecute
+	execReq := ExecutionRequest{
+		StepName:  stepName,
+		Config:    configJSON,
+		Resources: resources,
+		Columns:   columns,
+		RawInput:  rawInput,
 	}
 
-	outVal := results[0].Interface()
+	result, err := UnifiedExecute(ctx, e.registry, execReq)
+	if err != nil {
+		logger.L().Fatal("step execution failed", zap.String("stepName", stepName), zap.Error(err))
+		return nil, err
+	}
 
-	// Extract output arrays and save them to simulated SHM/history
-	columns := ExtractOutputArrays(outVal, step)
-	if len(columns) > 0 {
-		e.localHistory.Add(stepName, columns)
+	// 4. Save to simulated SHM/history
+	if len(result.Columns) > 0 {
+		e.localHistory.Add(stepName, result.Columns)
 	}
 
 	if isRef {
 		return &StepReference{
-			Data:    outVal,
-			Columns: columns,
+			Data:    result.Data,
+			Columns: result.Columns,
 		}, nil
 	}
 
-	return outVal, nil
+	return result.Data, nil
 }

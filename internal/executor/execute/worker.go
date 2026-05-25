@@ -139,7 +139,6 @@ func (e *workerExecutor) Execute(ctx context.Context, input any) (any, error) {
 
 	// 3. Prepare the Input Frame using Zero-Copy SHM access.
 	columns := make(map[string]arrow.Array)
-	ids := make(map[string]arrow.Array)
 	for fieldName, path := range request.InputReferences {
 		arr, err := locality.ReadArrowArrayFromPath(path)
 		if err != nil {
@@ -153,7 +152,7 @@ func (e *workerExecutor) Execute(ctx context.Context, input any) (any, error) {
 	var inputVal reflect.Value
 	if len(columns) > 0 {
 		if targetStep.InputType == reflect.TypeFor[*schema.Any]() {
-			inputVal = reflect.ValueOf(schema.NewAnyAccessor(accessor.Token{}, columns, ids))
+			inputVal = reflect.ValueOf(schema.NewAnyAccessor(accessor.Token{}, columns))
 
 		} else {
 			inputVal = reflect.New(targetStep.InputType.Elem())
@@ -279,14 +278,6 @@ func (e *workerExecutor) Execute(ctx context.Context, input any) (any, error) {
 						}), nil
 					} else {
 						outputHandles[name] = path
-					}
-				}
-
-				idsSlice := colAcc.GetIDs(token)
-				if idsArr, err := internalarrow.SliceToArrowArray(idsSlice); err == nil && idsArr != nil && !reflect.ValueOf(idsArr).IsNil() {
-					defer idsArr.Release()
-					if path, err := locality.WriteArrowArrayOnlyToShm(idsArr); err == nil {
-						outputHandles[name+"_id"] = path
 					}
 				}
 			}

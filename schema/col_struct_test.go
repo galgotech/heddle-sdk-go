@@ -57,11 +57,6 @@ func TestNewColStruct(t *testing.T) {
 	assert.Equal(t, int64(3), field2Arr.Value(2))
 	assert.Equal(t, int64(4), field2Arr.Value(3))
 
-	// Verify IDs
-	ids := col.GetIDs(accessor.Token{})
-	assert.NotNil(t, ids)
-	assert.Equal(t, 4, ids.Len())
-
 	// Verify Value(i)
 	val0 := col.Value(0)
 	assert.Equal(t, 1, val0.Field1.Len())
@@ -82,9 +77,8 @@ func TestNewColStruct(t *testing.T) {
 	assert.Equal(t, int64(4), val3.Field2.Value(0))
 
 	// Test SetData
-	col.SetData(accessor.Token{}, structArr, ids)
+	col.SetData(accessor.Token{}, structArr)
 	assert.Equal(t, structArr, col.GetArrowArray(accessor.Token{}))
-	assert.Equal(t, ids, col.GetIDs(accessor.Token{}))
 }
 
 type SubStruct struct {

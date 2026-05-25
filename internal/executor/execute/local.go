@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"strings"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"go.uber.org/zap"
@@ -94,14 +93,11 @@ func (e *localExecutor) Execute(ctx context.Context, input any) (any, error) {
 		if step.InputType == reflect.TypeFor[*schema.Any]() {
 			if len(refObj.Columns) > 0 {
 				columns := make(map[string]arrow.Array)
-				ids := make(map[string]arrow.Array)
 				for k, v := range refObj.Columns {
 					columns[k] = v
 				}
-				for k, v := range refObj.IDs {
-					ids[k] = v
-				}
-				inputVal = reflect.ValueOf(schema.NewAnyAccessor(accessor.Token{}, columns, ids))
+
+				inputVal = reflect.ValueOf(schema.NewAnyAccessor(accessor.Token{}, columns))
 			} else {
 				inputVal = reflect.Zero(step.InputType)
 			}
@@ -111,9 +107,7 @@ func (e *localExecutor) Execute(ctx context.Context, input any) (any, error) {
 			for k, v := range refObj.Columns {
 				bindMap[k] = v
 			}
-			for k, v := range refObj.IDs {
-				bindMap[k+"_id"] = v
-			}
+
 			if len(bindMap) > 0 {
 				err := Bind(inputVal, step.InputFieldsIndex, bindMap)
 				if err != nil {
@@ -127,15 +121,10 @@ func (e *localExecutor) Execute(ctx context.Context, input any) (any, error) {
 		if step.InputType == reflect.TypeFor[*schema.Any]() {
 			if len(shm) > 0 {
 				columns := make(map[string]arrow.Array)
-				ids := make(map[string]arrow.Array)
 				for k, v := range shm {
-					if before, ok0 := strings.CutSuffix(k, "_id"); ok0 {
-						ids[before] = v
-					} else {
-						columns[k] = v
-					}
+					columns[k] = v
 				}
-				inputVal = reflect.ValueOf(schema.NewAnyAccessor(accessor.Token{}, columns, ids))
+				inputVal = reflect.ValueOf(schema.NewAnyAccessor(accessor.Token{}, columns))
 			} else {
 				inputVal = reflect.Zero(step.InputType)
 			}
@@ -184,16 +173,15 @@ func (e *localExecutor) Execute(ctx context.Context, input any) (any, error) {
 	outVal := results[0].Interface()
 
 	// Extract output arrays and save them to simulated SHM/history
-	columns, ids := ExtractOutputArrays(outVal, step)
+	columns := ExtractOutputArrays(outVal, step)
 	if len(columns) > 0 {
-		e.localHistory.Add(stepName, columns, ids)
+		e.localHistory.Add(stepName, columns)
 	}
 
 	if isRef {
 		return &StepReference{
 			Data:    outVal,
 			Columns: columns,
-			IDs:     ids,
 		}, nil
 	}
 

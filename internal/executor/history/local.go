@@ -21,22 +21,15 @@ func NewLocalHistory() LocalHistory {
 	}
 }
 
-func (lh *localHistory) Add(stepName string, columns map[string]arrow.Array, ids map[string]arrow.Array) {
+func (lh *localHistory) Add(stepName string, columns map[string]arrow.Array) {
 	lh.mu.Lock()
 	defer lh.mu.Unlock()
 
 	retainedCols := make(map[string]arrow.Array)
-	retainedIDs := make(map[string]arrow.Array)
 	for k, arr := range columns {
 		if arr != nil && !reflect.ValueOf(arr).IsNil() {
 			arr.Retain()
 			retainedCols[k] = arr
-		}
-	}
-	for k, arr := range ids {
-		if arr != nil && !reflect.ValueOf(arr).IsNil() {
-			arr.Retain()
-			retainedIDs[k] = arr
 		}
 	}
 
@@ -51,7 +44,6 @@ func (lh *localHistory) Add(stepName string, columns map[string]arrow.Array, ids
 	state := &HistoryState{
 		StepName: stepName,
 		Columns:  retainedCols,
-		IDs:      retainedIDs,
 	}
 	lh.history = append(lh.history, state)
 	lh.cursor = len(lh.history) - 1
@@ -89,9 +81,6 @@ func (lh *localHistory) GetSimulatedSHM() map[string]arrow.Array {
 	state := lh.history[lh.cursor]
 	shm := make(map[string]arrow.Array)
 	maps.Copy(shm, state.Columns)
-	for k, v := range state.IDs {
-		shm[k+"_id"] = v
-	}
 	return shm
 }
 
@@ -111,11 +100,6 @@ func (lh *localHistory) releaseState(state *HistoryState) {
 		return
 	}
 	for _, arr := range state.Columns {
-		if arr != nil && !reflect.ValueOf(arr).IsNil() {
-			arr.Release()
-		}
-	}
-	for _, arr := range state.IDs {
 		if arr != nil && !reflect.ValueOf(arr).IsNil() {
 			arr.Release()
 		}

@@ -34,25 +34,29 @@ func NewAny(data map[string]any) *Any {
 	}
 
 	for key, value := range data {
-		ids := make([]int64, len(value.([]any)))
-		for i := range ids {
-			ids[i] = colIDNode.Generate().Int64()
+		var arr arrow.Array
+
+		if colAcc, ok := value.(ColAccessor); ok {
+			token := accessor.Token{}
+			arr = colAcc.GetArrowArray(token)
+
+		} else {
+			var err error
+			arr, err = internalarrow.SliceToArrowArray(value)
+			if err != nil {
+				logger.L().Fatal("failed to convert slice to arrow array", zap.Error(err))
+			}
 		}
 
-		arr, err := internalarrow.SliceToArrowArray(value)
-		if err != nil {
-			logger.L().Fatal("failed to convert slice to arrow array", zap.Error(err))
-		}
 		typeAny.columnsArr[key] = arr
 	}
 
 	return typeAny
 }
 
-func NewAnyAccessor(token accessor.Token, columns map[string]arrow.Array, ids map[string]arrow.Array) *Any {
+func NewAnyAccessor(token accessor.Token, columns map[string]arrow.Array) *Any {
 	typeAny := &Any{
 		columnsArr: columns,
-		idsArray:   ids,
 	}
 
 	return typeAny

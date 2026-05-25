@@ -15,22 +15,16 @@ import (
 )
 
 type ColStruct[T any] struct {
-	arr    arrow.Array
-	arrIds *array.Int64
-	dummy  *T
+	arr   arrow.Array
+	dummy *T
 }
 
 func (c *ColStruct[T]) GetArrowArray(accessor.Token) arrow.Array {
 	return c.arr
 }
 
-func (c *ColStruct[T]) GetIDs(accessor.Token) *array.Int64 {
-	return c.arrIds
-}
-
-func (c *ColStruct[T]) SetData(token accessor.Token, arr arrow.Array, arrIds *array.Int64) {
+func (c *ColStruct[T]) SetData(token accessor.Token, arr arrow.Array) {
 	c.arr = arr
-	c.arrIds = arrIds
 }
 
 func (c *ColStruct[T]) Len() int {
@@ -72,7 +66,7 @@ func (c *ColStruct[T]) Value(i int) *T {
 		}
 
 		// Set the data for the new column instance
-		colAcc.SetData(accessor.Token{}, slicedArr, newIds(1))
+		colAcc.SetData(accessor.Token{}, slicedArr)
 
 		// Set the field value in the struct
 		structElem.Field(j).Set(colPtrVal)
@@ -100,8 +94,7 @@ func NewColStruct[T any](data []*T) *ColStruct[T] {
 	}
 
 	return &ColStruct[T]{
-		arr:    structArr,
-		arrIds: newIds(structArr.Len()),
+		arr: structArr,
 	}
 }
 

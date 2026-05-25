@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/apache/arrow/go/v18/arrow"
-	"github.com/apache/arrow/go/v18/arrow/array"
 
 	"github.com/galgotech/heddle-sdk-go/internal/accessor"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
@@ -31,7 +30,6 @@ type LocalInput struct {
 type StepReference struct {
 	Data    any
 	Columns map[string]arrow.Array
-	IDs     map[string]arrow.Array
 }
 
 // PackData inspects the input struct and extracts ColAccessors into a StepReference.
@@ -39,7 +37,6 @@ func PackData(input any) *StepReference {
 	if input == nil {
 		return &StepReference{
 			Columns: make(map[string]arrow.Array),
-			IDs:     make(map[string]arrow.Array),
 		}
 	}
 	if ref, ok := input.(*StepReference); ok {
@@ -47,14 +44,12 @@ func PackData(input any) *StepReference {
 	}
 
 	columns := make(map[string]arrow.Array)
-	ids := make(map[string]arrow.Array)
 
 	vVal := reflect.ValueOf(input)
 	if vVal.Kind() == reflect.Pointer {
 		if vVal.IsNil() {
 			return &StepReference{
 				Columns: columns,
-				IDs:     ids,
 			}
 		}
 		vVal = vVal.Elem()
@@ -77,10 +72,6 @@ func PackData(input any) *StepReference {
 					if arr != nil && !reflect.ValueOf(arr).IsNil() {
 						columns[name] = arr
 					}
-					idArr := colAcc.GetIDs(token)
-					if idArr != nil && !reflect.ValueOf(idArr).IsNil() {
-						ids[name] = idArr
-					}
 				}
 			}
 		}
@@ -89,7 +80,6 @@ func PackData(input any) *StepReference {
 	return &StepReference{
 		Data:    input,
 		Columns: columns,
-		IDs:     ids,
 	}
 }
 
@@ -149,11 +139,8 @@ func Bind(reflectValue reflect.Value, fieldIndices []int, columns map[string]arr
 		if arr == nil {
 			return fmt.Errorf("column %q is required but missing", name)
 		}
-		idArr, ok := columns[name+"_id"]
-		if !ok {
-			return fmt.Errorf("column %q is required but missing", name+"_id")
-		}
 
+		var ok bool
 		var colAcc schema.ColAccessor
 		if fValue.Kind() == reflect.Pointer {
 			if fValue.IsNil() {
@@ -169,17 +156,16 @@ func Bind(reflectValue reflect.Value, fieldIndices []int, columns map[string]arr
 		}
 
 		arr.Retain()
-		idArr.Retain()
-		colAcc.SetData(accessor.Token{}, arr, idArr.(*array.Int64))
+		colAcc.SetData(accessor.Token{}, arr)
 
 	}
 
 	return nil
 }
 
-func ExtractOutputArrays(outVal any, step registry.StepRegistration) (map[string]arrow.Array, map[string]arrow.Array) {
+func ExtractOutputArrays(outVal any, step registry.StepRegistration) map[string]arrow.Array {
 	if outVal == nil || reflect.ValueOf(outVal).IsNil() {
-		return nil, nil
+		return nil
 	}
 
 	columns := make(map[string]arrow.Array)
@@ -227,14 +213,11 @@ func ExtractOutputArrays(outVal any, step registry.StepRegistration) (map[string
 					if arr != nil && !reflect.ValueOf(arr).IsNil() {
 						columns[name] = arr
 					}
-					idArr := colAcc.GetIDs(token)
-					if idArr != nil && !reflect.ValueOf(idArr).IsNil() {
-						ids[name] = idArr
-					}
+
 				}
 			}
 		}
 	}
 
-	return columns, ids
+	return columns
 }

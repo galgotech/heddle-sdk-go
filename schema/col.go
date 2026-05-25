@@ -37,22 +37,19 @@ type ColSchema struct {
 // Requires accessor.Token, preventing external packages from accessing it.
 type ColAccessor interface {
 	GetArrowArray(accessor.Token) arrow.Array
-	GetIDs(accessor.Token) *array.Int64
-	SetData(token accessor.Token, arr arrow.Array, ids *array.Int64)
+	SetData(token accessor.Token, arr arrow.Array)
 }
 
 type Col[T heddleType, K goTypes] struct {
-	arr    arrow.Array
-	arrIds *array.Int64
+	arr arrow.Array
 }
 
 func (c *Col[T, K]) GetArrowArray(accessor.Token) arrow.Array {
 	return c.arr
 }
 
-func (c *Col[T, K]) SetData(token accessor.Token, arr arrow.Array, ids *array.Int64) {
+func (c *Col[T, K]) SetData(token accessor.Token, arr arrow.Array) {
 	c.arr = arr
-	c.arrIds = ids
 }
 
 func (c *Col[T, K]) Len() int {
@@ -60,10 +57,6 @@ func (c *Col[T, K]) Len() int {
 		return 0
 	}
 	return c.arr.Len()
-}
-
-func (c *Col[T, K]) GetIDs(accessor.Token) *array.Int64 {
-	return c.arrIds
 }
 
 func (c Col[T, K]) Value(i int) K {
@@ -83,8 +76,7 @@ func (c Col[T, K]) All() iter.Seq2[int, K] {
 
 func newCol[T heddleType, K goTypes](arr arrow.Array) *Col[T, K] {
 	return &Col[T, K]{
-		arr:    arr,
-		arrIds: newIds(arr.Len()),
+		arr: arr,
 	}
 }
 
@@ -219,18 +211,4 @@ func NewColString(data []string) *ColString {
 	arr := b.NewArray()
 
 	return newCol[String, string](arr)
-}
-
-func newIds(size int) *array.Int64 {
-	mem := memory.DefaultAllocator
-
-	// ids
-	ids := make([]int64, size)
-	for i := range ids {
-		ids[i] = colIDNode.Generate().Int64()
-	}
-	bInt64 := array.NewInt64Builder(mem)
-	defer bInt64.Release()
-	bInt64.AppendValues(ids, nil)
-	return bInt64.NewInt64Array()
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/apache/arrow/go/v18/arrow"
+	"github.com/apache/arrow/go/v18/arrow/array"
 
 	"github.com/galgotech/heddle-sdk-go/internal/accessor"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
@@ -114,14 +115,67 @@ func GetColAccessor(fValue reflect.Value) (schema.ColAccessor, bool) {
 	return nil, false
 }
 
+func registerArrowArrayInRegistry(r *schema.ColRegistry, stepName string, dir schema.StepDirection, name string, arr arrow.Array) {
+	if arr == nil || reflect.ValueOf(arr).IsNil() {
+		return
+	}
+	if structArr, ok := arr.(*array.Struct); ok {
+		var children []string
+		for idx := 0; idx < structArr.NumField(); idx++ {
+			childField := structArr.DataType().(*arrow.StructType).Field(idx)
+			childName := strings.ToLower(childField.Name)
+			childKey := name + "_" + childName
+			children = append(children, childKey)
+
+			registerArrowArrayInRegistry(r, stepName, dir, childKey, structArr.Field(idx))
+		}
+
+		offsets := make([]int, structArr.Len()+1)
+		for i := 0; i <= structArr.Len(); i++ {
+			offsets[i] = i
+		}
+		r.RegisterStruct(stepName, dir, name, children, structArr.Len(), offsets)
+		r.SetArray(stepName, dir, name, structArr)
+	} else {
+		arrowType := "utf8"
+		switch arr.(type) {
+		case *array.Int8:
+			arrowType = "int8"
+		case *array.Int16:
+			arrowType = "int16"
+		case *array.Int32:
+			arrowType = "int32"
+		case *array.Int64:
+			arrowType = "int64"
+		case *array.Uint8:
+			arrowType = "uint8"
+		case *array.Uint16:
+			arrowType = "uint16"
+		case *array.Uint32:
+			arrowType = "uint32"
+		case *array.Uint64:
+			arrowType = "uint64"
+		case *array.Float32:
+			arrowType = "float32"
+		case *array.Float64:
+			arrowType = "float64"
+		case *array.Boolean:
+			arrowType = "bool"
+		}
+		r.RegisterLeaf(stepName, dir, name, arrowType, arr)
+	}
+}
+
 // Bind maps Arrow Table columns to Go struct fields.
 func Bind(reflectValue reflect.Value, fieldIndices []int, columns map[string]arrow.Array) error {
 	var numRows int = -1
 	for _, arr := range columns {
-		if numRows == -1 {
-			numRows = arr.Len()
-		} else if numRows != arr.Len() {
-			return fmt.Errorf("inconsistent column lengths")
+		if arr != nil && !reflect.ValueOf(arr).IsNil() {
+			if numRows == -1 {
+				numRows = arr.Len()
+			} else if numRows != arr.Len() {
+				return fmt.Errorf("inconsistent column lengths")
+			}
 		}
 	}
 	if numRows == -1 {
@@ -131,36 +185,96 @@ func Bind(reflectValue reflect.Value, fieldIndices []int, columns map[string]arr
 	if reflectValue.Kind() == reflect.Pointer {
 		reflectValue = reflectValue.Elem()
 	}
-	reflectType := reflectValue.Type()
-	for _, i := range fieldIndices {
-		fValue := reflectValue.Field(i)
-		name := reflectType.Field(i).Name
-		arr := columns[name]
-		if arr == nil {
-			return fmt.Errorf("column %q is required but missing", name)
-		}
 
-		var ok bool
-		var colAcc schema.ColAccessor
+	r := schema.NewColRegistry()
+	r.RegisterStep("_temp")
+
+	// Register all arrays from columns map at registry time!
+	// Struct arrays will be recursively decomposed and populated.
+	for k, v := range columns {
+		registerArrowArrayInRegistry(r, "_temp", schema.Input, strings.ToLower(k), v)
+	}
+
+	t := reflectValue.Type()
+	_, err := registerInputFields(r, "_temp", "", t)
+	if err != nil {
+		return err
+	}
+
+	for _, i := range fieldIndices {
+		fField := t.Field(i)
+		fieldName := strings.ToLower(fField.Name)
+
+		fValue := reflectValue.Field(i)
 		if fValue.Kind() == reflect.Pointer {
 			if fValue.IsNil() {
 				newCol := reflect.New(fValue.Type().Elem())
 				fValue.Set(newCol)
 			}
-			colAcc, ok = fValue.Interface().(schema.ColAccessor)
-		} else {
-			colAcc, ok = fValue.Addr().Interface().(schema.ColAccessor)
-		}
-		if !ok || colAcc == nil {
-			return fmt.Errorf("%s column %q is not a ColAccessor", reflectType.Field(i).Name, name)
 		}
 
-		arr.Retain()
-		colAcc.SetData(accessor.Token{}, arr)
-
+		if binder, ok := fValue.Interface().(schema.ColRegistryBinder); ok {
+			binder.BindRegistry(accessor.Token{}, r, "_temp", schema.Input, fieldName)
+		}
 	}
 
 	return nil
+}
+
+func registerInputFields(r *schema.ColRegistry, stepName string, prefix string, t reflect.Type) ([]string, error) {
+	var children []string
+	for fField := range t.Fields() {
+		if fField.Anonymous || !fField.IsExported() {
+			continue
+		}
+		fieldName := strings.ToLower(fField.Name)
+		var colName string
+		if prefix == "" {
+			colName = fieldName
+		} else {
+			colName = prefix + "_" + fieldName
+		}
+
+		isColStruct := strings.Contains(fField.Type.String(), "ColStruct")
+		if isColStruct {
+			colStructType := fField.Type.Elem()
+			dummyField, ok := colStructType.FieldByName("dummy")
+			if !ok {
+				return nil, fmt.Errorf("ColStruct has no dummy field")
+			}
+			subStructType := dummyField.Type.Elem()
+
+			subChildren, err := registerInputFields(r, stepName, colName, subStructType)
+			if err != nil {
+				return nil, err
+			}
+
+			// If this struct column was not registered yet, register it as flat 1-to-1 view
+			if _, ok := r.GetEntry(stepName, schema.Input, colName); !ok {
+				var totalSize int
+				if len(subChildren) > 0 {
+					if firstChildArr, ok := r.GetArray(stepName, schema.Input, subChildren[0]); ok {
+						totalSize = firstChildArr.Len()
+					}
+				}
+
+				offsets := make([]int, totalSize+1)
+				for i := 0; i <= totalSize; i++ {
+					offsets[i] = i
+				}
+
+				r.RegisterStruct(stepName, schema.Input, colName, subChildren, totalSize, offsets)
+			}
+			children = append(children, colName)
+		} else {
+			// Leaf: verify that it is fully registered in the registry
+			if _, ok := r.GetEntry(stepName, schema.Input, colName); !ok {
+				return nil, fmt.Errorf("column %q is required but missing", colName)
+			}
+			children = append(children, colName)
+		}
+	}
+	return children, nil
 }
 
 func ExtractOutputArrays(outVal any, step registry.StepRegistration) map[string]arrow.Array {
@@ -169,7 +283,6 @@ func ExtractOutputArrays(outVal any, step registry.StepRegistration) map[string]
 	}
 
 	columns := make(map[string]arrow.Array)
-	ids := make(map[string]arrow.Array)
 
 	vVal := reflect.ValueOf(outVal)
 	if vVal.Kind() == reflect.Pointer {
@@ -181,18 +294,6 @@ func ExtractOutputArrays(outVal any, step registry.StepRegistration) map[string]
 			for _, name := range df.Columns() {
 				if colData, ok := df.Get(name); ok {
 					columns[name] = colData
-
-					// Use reflection to extract idsArray from Any
-					dfVal := reflect.ValueOf(df).Elem()
-					idsArrayField := dfVal.FieldByName("idsArray")
-					if idsArrayField.IsValid() && idsArrayField.Kind() == reflect.Map {
-						mapVal := idsArrayField.MapIndex(reflect.ValueOf(name))
-						if mapVal.IsValid() && !mapVal.IsNil() {
-							if idArr, ok := mapVal.Interface().(arrow.Array); ok {
-								ids[name] = idArr
-							}
-						}
-					}
 				}
 			}
 		}
@@ -213,7 +314,6 @@ func ExtractOutputArrays(outVal any, step registry.StepRegistration) map[string]
 					if arr != nil && !reflect.ValueOf(arr).IsNil() {
 						columns[name] = arr
 					}
-
 				}
 			}
 		}

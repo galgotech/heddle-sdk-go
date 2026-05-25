@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 
 	"github.com/apache/arrow/go/v18/arrow"
+	"github.com/galgotech/heddle-lang/pkg/logger"
 	"go.uber.org/zap"
 
-	"github.com/galgotech/heddle-lang/pkg/logger"
 	"github.com/galgotech/heddle-sdk-go/internal/accessor"
 	"github.com/galgotech/heddle-sdk-go/internal/executor/history"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
@@ -104,9 +105,7 @@ func (e *localExecutor) Execute(ctx context.Context, input any) (any, error) {
 		} else if step.InputType != nil && step.InputType.Kind() == reflect.Pointer {
 			inputVal = reflect.New(step.InputType.Elem())
 			bindMap := make(map[string]arrow.Array)
-			for k, v := range refObj.Columns {
-				bindMap[k] = v
-			}
+			maps.Copy(bindMap, refObj.Columns)
 
 			if len(bindMap) > 0 {
 				err := Bind(inputVal, step.InputFieldsIndex, bindMap)

@@ -100,7 +100,6 @@ func TestExecutorSimulationAndTimeTravel(t *testing.T) {
 	shm := exec.GetSimulatedSHM()
 	require.NotNil(t, shm)
 	assert.Contains(t, shm, "OutVal")
-	assert.Contains(t, shm, "OutVal_id")
 
 	// 2. Run Step B with nil input -> should auto-chain from Step A
 	resB := exec.Execute(ctx, "step_b", DummyConfig{Val: "test"}, nil)

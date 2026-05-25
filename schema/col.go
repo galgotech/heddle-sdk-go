@@ -6,22 +6,9 @@ import (
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
 	"github.com/apache/arrow/go/v18/arrow/memory"
-	"github.com/bwmarrin/snowflake"
-	"github.com/galgotech/heddle-lang/pkg/logger"
-	"go.uber.org/zap"
 
 	"github.com/galgotech/heddle-sdk-go/internal/accessor"
 )
-
-var colIDNode *snowflake.Node
-
-func init() {
-	var err error
-	colIDNode, err = snowflake.NewNode(1)
-	if err != nil {
-		logger.L().Fatal("failed to create snowflake node", zap.Error(err))
-	}
-}
 
 type hasValue[T goTypes] interface {
 	Value(i int) T
@@ -40,27 +27,63 @@ type ColAccessor interface {
 	SetData(token accessor.Token, arr arrow.Array)
 }
 
+type ColRegistryBinder interface {
+	BindRegistry(token accessor.Token, registry *ColRegistry, stepName string, dir StepDirection, colName string)
+}
+
 type Col[T heddleType, K goTypes] struct {
-	arr arrow.Array
+	registry  *ColRegistry
+	stepName  string
+	direction StepDirection
+	colName   string
+}
+
+func (c *Col[T, K]) BindRegistry(token accessor.Token, registry *ColRegistry, stepName string, dir StepDirection, colName string) {
+	c.registry = registry
+	c.stepName = stepName
+	c.direction = dir
+	c.colName = colName
 }
 
 func (c *Col[T, K]) GetArrowArray(accessor.Token) arrow.Array {
-	return c.arr
+	if c.registry == nil {
+		return nil
+	}
+	arr, _ := c.registry.GetArray(c.stepName, c.direction, c.colName)
+	return arr
 }
 
 func (c *Col[T, K]) SetData(token accessor.Token, arr arrow.Array) {
-	c.arr = arr
+	if c.registry == nil {
+		c.registry = NewColRegistry()
+		c.registry.RegisterStep("_temp")
+		c.stepName = "_temp"
+		c.direction = Input
+		c.colName = "col"
+	}
+	c.registry.SetArray(c.stepName, c.direction, c.colName, arr)
 }
 
 func (c *Col[T, K]) Len() int {
-	if c.arr == nil {
+	if c.registry == nil {
 		return 0
 	}
-	return c.arr.Len()
+	arr, ok := c.registry.GetArray(c.stepName, c.direction, c.colName)
+	if !ok || arr == nil {
+		return 0
+	}
+	return arr.Len()
 }
 
 func (c Col[T, K]) Value(i int) K {
-	return any(c.arr).(hasValue[K]).Value(i)
+	if c.registry == nil {
+		panic("column registry is nil")
+	}
+	arr, ok := c.registry.GetArray(c.stepName, c.direction, c.colName)
+	if !ok || arr == nil {
+		panic("column array is nil")
+	}
+	return any(arr).(hasValue[K]).Value(i)
 }
 
 // All returns an iterator to be used with standard 'for i, e := range' loops.
@@ -74,10 +97,20 @@ func (c Col[T, K]) All() iter.Seq2[int, K] {
 	}
 }
 
-func newCol[T heddleType, K goTypes](arr arrow.Array) *Col[T, K] {
+func newCol[T heddleType, K goTypes](registry *ColRegistry, stepName string, dir StepDirection, name string) *Col[T, K] {
 	return &Col[T, K]{
-		arr: arr,
+		registry:  registry,
+		stepName:  stepName,
+		direction: dir,
+		colName:   name,
 	}
+}
+
+func newColWithData[T heddleType, K goTypes](arrowType string, arr arrow.Array) *Col[T, K] {
+	r := NewColRegistry()
+	r.RegisterStep("_temp")
+	r.RegisterLeaf("_temp", Input, "col", arrowType, arr)
+	return newCol[T, K](r, "_temp", Input, "col")
 }
 
 type ColInt8 = Col[Int8, int8]
@@ -100,7 +133,7 @@ func NewColInt8(data []int8) *ColInt8 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Int8, int8](arr)
+	return newColWithData[Int8, int8]("int8", arr)
 }
 
 func NewColInt16(data []int16) *ColInt16 {
@@ -110,7 +143,7 @@ func NewColInt16(data []int16) *ColInt16 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Int16, int16](arr)
+	return newColWithData[Int16, int16]("int16", arr)
 }
 
 func NewColInt32(data []int32) *ColInt32 {
@@ -120,7 +153,7 @@ func NewColInt32(data []int32) *ColInt32 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Int32, int32](arr)
+	return newColWithData[Int32, int32]("int32", arr)
 }
 
 func NewColInt64(data []int64) *ColInt64 {
@@ -130,7 +163,7 @@ func NewColInt64(data []int64) *ColInt64 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Int64, int64](arr)
+	return newColWithData[Int64, int64]("int64", arr)
 }
 
 func NewColUint8(data []uint8) *ColUint8 {
@@ -140,7 +173,7 @@ func NewColUint8(data []uint8) *ColUint8 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Uint8, uint8](arr)
+	return newColWithData[Uint8, uint8]("uint8", arr)
 }
 
 func NewColUint16(data []uint16) *ColUint16 {
@@ -150,7 +183,7 @@ func NewColUint16(data []uint16) *ColUint16 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Uint16, uint16](arr)
+	return newColWithData[Uint16, uint16]("uint16", arr)
 }
 
 func NewColUint32(data []uint32) *ColUint32 {
@@ -160,7 +193,7 @@ func NewColUint32(data []uint32) *ColUint32 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Uint32, uint32](arr)
+	return newColWithData[Uint32, uint32]("uint32", arr)
 }
 
 func NewColUint64(data []uint64) *ColUint64 {
@@ -170,7 +203,7 @@ func NewColUint64(data []uint64) *ColUint64 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Uint64, uint64](arr)
+	return newColWithData[Uint64, uint64]("uint64", arr)
 }
 
 func NewColFloat32(data []float32) *ColFloat32 {
@@ -180,7 +213,7 @@ func NewColFloat32(data []float32) *ColFloat32 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Float32, float32](arr)
+	return newColWithData[Float32, float32]("float32", arr)
 }
 
 func NewColFloat64(data []float64) *ColFloat64 {
@@ -190,7 +223,7 @@ func NewColFloat64(data []float64) *ColFloat64 {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Float64, float64](arr)
+	return newColWithData[Float64, float64]("float64", arr)
 }
 
 func NewColBoolean(data []bool) *ColBoolean {
@@ -200,7 +233,7 @@ func NewColBoolean(data []bool) *ColBoolean {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[Boolean, bool](arr)
+	return newColWithData[Boolean, bool]("bool", arr)
 }
 
 func NewColString(data []string) *ColString {
@@ -210,5 +243,5 @@ func NewColString(data []string) *ColString {
 	b.AppendValues(data, nil)
 	arr := b.NewArray()
 
-	return newCol[String, string](arr)
+	return newColWithData[String, string]("utf8", arr)
 }

@@ -61,6 +61,9 @@ func IsResource(t reflect.Type) bool {
 }
 
 func IsCol(t reflect.Type) bool {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
 	return strings.HasPrefix(t.Name(), "Col") && t.PkgPath() == packageName
 }
 
@@ -96,7 +99,11 @@ func ExtractInputOutputSchema(t reflect.Type) (schema.FrameSchema, error) {
 		fieldType := f.Type
 
 		if IsCol(fieldType) {
-			typeName := fieldType.Name()
+			tType := fieldType
+			if tType.Kind() == reflect.Pointer {
+				tType = tType.Elem()
+			}
+			typeName := tType.Name()
 			var arrowType string
 			if strings.Contains(typeName, "Int8") {
 				arrowType = "int8"

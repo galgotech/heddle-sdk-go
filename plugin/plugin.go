@@ -1,35 +1,34 @@
 package plugin
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 
 	"github.com/galgotech/heddle-sdk-go/internal/executor"
-	"github.com/galgotech/heddle-sdk-go/internal/network"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
 )
 
 type Plugin struct {
-	Ready chan struct{}
+	Namespace string
+	Ready     chan struct{}
 
-	registry      registry.Registry
-	executor      executor.Executor
-	networkClient network.NetworkClient
+	registry registry.Registry
 }
 
 func (p *Plugin) Register(group any) error {
 	return p.registry.Register(group)
 }
 
-// Start initializes the plugin's lifecycle, establishing a resilient connection to the Worker.
-func (p *Plugin) Start() error {
-	return p.networkClient.Start(context.Background())
+func (p *Plugin) Registry() registry.Registry {
+	return p.registry
 }
 
-// ExecuteStepDirectly executes a registered step directly/locally (without starting gRPC/Arrow Flight, without SHM)
-func (p *Plugin) Execute(ctx context.Context, stepName string, configJSON any, input any) any {
-	return p.executor.ExecuteStepDirectly(ctx, stepName, configJSON, input)
+func (p *Plugin) GetNamespace() string {
+	return p.Namespace
+}
+
+func (p *Plugin) GetReady() chan struct{} {
+	return p.Ready
 }
 
 func (p *Plugin) ResourceInstance(id string, resourceType string, config any) error {
@@ -64,18 +63,19 @@ func (p *Plugin) ResourceSet(fieldName string, instanceID string) {
 // New creates a new Heddle Plugin instance within the specified namespace.
 func New(namespace string) *Plugin {
 	ready := make(chan struct{})
-	language := "go"
+	reg := registry.NewRegistry()
 
-	registry := registry.NewRegistry()
-	exec := executor.NewExecutor(registry)
-	networkClient := network.NewNetworkClient(namespace, language, ready, registry, exec)
-
-	p := &Plugin{
-		Ready:         ready,
-		registry:      registry,
-		networkClient: networkClient,
-		executor:      exec,
+	return &Plugin{
+		Namespace: namespace,
+		Ready:     ready,
+		registry:  reg,
 	}
+}
 
-	return p
+func PackData(input any) any {
+	return executor.PackData(input)
+}
+
+func UnpackData(ref any) any {
+	return executor.UnpackData(ref)
 }

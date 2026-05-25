@@ -149,14 +149,14 @@ func builderListStruct(indexReference []indexReference, structType reflect.Type,
 		return nil, fmt.Errorf("expected slice, got %s", dataVal.Kind())
 	}
 
-	dataArray := []arrow.Array{}
+	dataArray := make([]arrow.Array, dataVal.Len())
 	for i := 0; i < dataVal.Len(); i++ {
 		structVal := dataVal.Index(i)
 		structArr, err := builderStruct(indexReference, structType, structVal)
 		if err != nil {
 			return nil, err
 		}
-		dataArray = append(dataArray, structArr)
+		dataArray[i] = structArr
 	}
 
 	mem := memory.DefaultAllocator

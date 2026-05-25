@@ -19,7 +19,7 @@ import (
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
 	heddleruntime "github.com/galgotech/heddle-lang/pkg/runtime"
 	"github.com/galgotech/heddle-lang/pkg/schema"
-	"github.com/galgotech/heddle-sdk-go/internal/executor"
+	"github.com/galgotech/heddle-sdk-go/internal/executor/execute"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
 )
 
@@ -32,7 +32,7 @@ type flightNetworkClient struct {
 	language  string
 	ready     chan struct{}
 	registry  registry.Registry
-	executor  executor.Executor
+	executor  execute.Executor
 }
 
 // Start initializes the plugin's lifecycle, establishing a resilient connection to the Worker.
@@ -229,10 +229,19 @@ func (nc *flightNetworkClient) startExecutionLoop(ctx context.Context, client fl
 
 		// Execute task in a goroutine
 		go func(r baseplugin.ExecuteStepRequest) {
-			response := nc.executor.ExecuteTask(ctx, r)
+			res, err := nc.executor.Execute(ctx, r)
+			if err != nil {
+				logger.L().Error("Execution failed", zap.Error(err))
+				return
+			}
+			response, ok := res.(baseplugin.ExecuteStepResponse)
+			if !ok {
+				logger.L().Error("Execution response has unexpected type")
+				return
+			}
 			responseBody, err := json.Marshal(response)
 			if err != nil {
-				logger.L().Error("Failed to unmarshal response", zap.Error(err))
+				logger.L().Error("Failed to marshal response", zap.Error(err))
 				return
 			}
 			if err := stream.Send(&flight.FlightData{DataBody: responseBody}); err != nil {
@@ -247,7 +256,7 @@ func NewNetworkClient(
 	language string,
 	ready chan struct{},
 	reg registry.Registry,
-	exec executor.Executor,
+	exec execute.Executor,
 ) NetworkClient {
 	return &flightNetworkClient{
 		namespace: namespace,

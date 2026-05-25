@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
+	"github.com/galgotech/heddle-sdk-go/network"
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
@@ -42,7 +43,7 @@ func TestRegisterResource(t *testing.T) {
 	err := p.Register(&TestResourceGroup{})
 	require.NoError(t, err)
 
-	reg, ok := p.registry.GetResource("testresource")
+	reg, ok := p.Registry().GetResource("testresource")
 	require.True(t, ok)
 	assert.Equal(t, "testresource", reg.Name)
 	require.NotNil(t, reg.FieldSchema)
@@ -57,7 +58,7 @@ func TestPluginRegistrationIncludesResources(t *testing.T) {
 	require.NoError(t, err)
 
 	resources := make(map[string]schema.FieldSchema)
-	for name, res := range p.registry.AllResources() {
+	for name, res := range p.Registry().AllResources() {
 		resources[name] = res.FieldSchema
 	}
 
@@ -103,7 +104,7 @@ func TestPluginConnectRetry(t *testing.T) {
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- p.Start()
+		errChan <- network.Run(context.Background(), p)
 	}()
 
 	// Wait a bit to ensure it failed at least once (internally)
@@ -194,7 +195,7 @@ func TestRegisterStepMetadata(t *testing.T) {
 	err := p.Register(&MyTestGroup{})
 	require.NoError(t, err)
 
-	reg, ok := p.registry.GetStep("my_test_step")
+	reg, ok := p.Registry().GetStep("my_test_step")
 	require.True(t, ok)
 	assert.Equal(t, "MyDocComment is a test doc comment.\n", reg.Documentation)
 	assert.Contains(t, reg.SourceCode, "func (s *MyTestGroup) MyTestStep")

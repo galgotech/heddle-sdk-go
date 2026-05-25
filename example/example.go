@@ -7,6 +7,8 @@ import (
 	"github.com/galgotech/heddle-lang/pkg/logger"
 	"go.uber.org/zap"
 
+	"github.com/galgotech/heddle-sdk-go/local"
+	"github.com/galgotech/heddle-sdk-go/network"
 	"github.com/galgotech/heddle-sdk-go/plugin"
 	"github.com/galgotech/heddle-sdk-go/schema"
 )
@@ -87,7 +89,7 @@ func Start() {
 		logger.L().Error("Failed to register steps", zap.Error(err))
 	}
 
-	go p.Start()
+	go network.Run(context.Background(), p)
 }
 
 // Run executes the processing flow locally in-process without worker daemon dependencies.
@@ -102,13 +104,13 @@ func Run() {
 
 	// resource test = pg.connection { host: "pg.internal" }
 	configResource := map[string]string{"host": "pg.internal"}
-	err = p.ResourceInstance("test", "Connection", configResource)
+	err = p.ResourceInstance("test", "pg.connection", configResource)
 	if err != nil {
 		logger.L().Error("Failed to create resource instance", zap.Error(err))
 	}
 
 	// step fetch_user_data = <DB=test> ...
-	p.ResourceSet("DB", "test")
+	p.ResourceSet("DB", "pg.test")
 
 	// pg.query { query: "SELECT id AS user_id, country FROM users WHERE id = @user_id" }
 	c := QueryConfig{
@@ -119,7 +121,8 @@ func Run() {
 	}
 
 	ctx := context.Background()
-	output := p.Execute(ctx, "query", c, &input)
+	exec := local.NewLocalRunner(p)
+	output := exec.Execute(ctx, "query", c, &input)
 	fmt.Printf("\n--- Step Direct Execution Result ---\n")
 	if out, ok := output.(*QueryOutput); ok {
 		for i := 0; i < out.UserID.Len(); i++ {

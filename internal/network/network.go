@@ -16,16 +16,13 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/galgotech/heddle-lang/pkg/logger"
-	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
-	heddleruntime "github.com/galgotech/heddle-lang/pkg/runtime"
+	"github.com/galgotech/heddle-lang/pkg/plugin"
+	"github.com/galgotech/heddle-lang/pkg/runtime"
 	"github.com/galgotech/heddle-lang/pkg/schema"
+
 	"github.com/galgotech/heddle-sdk-go/internal/executor/execute"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
 )
-
-type NetworkClient interface {
-	Start(ctx context.Context) error
-}
 
 type flightNetworkClient struct {
 	namespace string
@@ -35,9 +32,25 @@ type flightNetworkClient struct {
 	executor  execute.Executor
 }
 
-// Start initializes the plugin's lifecycle, establishing a resilient connection to the Worker.
+func NewNetworkClient(
+	namespace string,
+	language string,
+	ready chan struct{},
+	reg registry.Registry,
+	exec execute.Executor,
+) *flightNetworkClient {
+	return &flightNetworkClient{
+		namespace: namespace,
+		language:  language,
+		ready:     ready,
+		registry:  reg,
+		executor:  exec,
+	}
+}
+
+// Run initializes the plugin's lifecycle, establishing a resilient connection to the Worker.
 // It manages registration, heartbeats, and the bidirectional execution stream.
-func (nc *flightNetworkClient) Start(ctx context.Context) error {
+func (nc *flightNetworkClient) Run(ctx context.Context) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -54,7 +67,8 @@ func (nc *flightNetworkClient) Start(ctx context.Context) error {
 	// 1. Start Retry Loop
 	for {
 		// 1.1 Connect to Worker (handle UDS if path starts with / or unix:)
-		target := heddleruntime.WorkerUDSPath
+		target := runtime.WorkerUDSPath
+
 		// Establish the gRPC connection to the Worker.
 		conn, err = grpc.NewClient(target, opts...)
 		if err != nil {
@@ -94,7 +108,7 @@ func (nc *flightNetworkClient) Start(ctx context.Context) error {
 			resources[name] = res.FieldSchema
 		}
 
-		registration := baseplugin.PluginRegistration{
+		registration := plugin.PluginRegistration{
 			Namespace: nc.namespace,
 			Language:  nc.language,
 			Version:   "0.1.0",
@@ -110,7 +124,7 @@ func (nc *flightNetworkClient) Start(ctx context.Context) error {
 		// Submit registration via Arrow Flight DoAction.
 		// This notifies the Worker of the plugin's namespace and step capabilities.
 		res, err := client.DoAction(ctx, &flight.Action{
-			Type: baseplugin.ActionRegisterPlugin,
+			Type: plugin.ActionRegisterPlugin,
 			Body: registrationBody,
 		})
 		if err != nil {
@@ -183,14 +197,14 @@ func (nc *flightNetworkClient) startHeartbeat(ctx context.Context, client flight
 	for {
 		select {
 		case <-ticker.C:
-			hb := baseplugin.Heartbeat{
+			hb := plugin.Heartbeat{
 				Namespace: nc.namespace,
 				Timestamp: time.Now(),
 				Status:    "ready",
 			}
 			body, _ := json.Marshal(hb)
 			_, err := client.DoAction(ctx, &flight.Action{
-				Type: baseplugin.ActionPluginHeartbeat,
+				Type: plugin.ActionPluginHeartbeat,
 				Body: body,
 			})
 			if err != nil {
@@ -221,22 +235,17 @@ func (nc *flightNetworkClient) startExecutionLoop(ctx context.Context, client fl
 			return fmt.Errorf("exchange stream closed: %w", err)
 		}
 
-		var request baseplugin.ExecuteStepRequest
+		var request plugin.ExecuteStepRequest
 		if err := json.Unmarshal(data.DataBody, &request); err != nil {
 			logger.L().Error("Failed to unmarshal request", zap.Error(err))
 			continue
 		}
 
 		// Execute task in a goroutine
-		go func(r baseplugin.ExecuteStepRequest) {
-			res, err := nc.executor.Execute(ctx, r)
+		go func(r plugin.ExecuteStepRequest) {
+			response, err := nc.executor.Execute(ctx, r)
 			if err != nil {
 				logger.L().Error("Execution failed", zap.Error(err))
-				return
-			}
-			response, ok := res.(baseplugin.ExecuteStepResponse)
-			if !ok {
-				logger.L().Error("Execution response has unexpected type")
 				return
 			}
 			responseBody, err := json.Marshal(response)
@@ -248,21 +257,5 @@ func (nc *flightNetworkClient) startExecutionLoop(ctx context.Context, client fl
 				logger.L().Error("Failed to send response", zap.Error(err))
 			}
 		}(request)
-	}
-}
-
-func NewNetworkClient(
-	namespace string,
-	language string,
-	ready chan struct{},
-	reg registry.Registry,
-	exec execute.Executor,
-) NetworkClient {
-	return &flightNetworkClient{
-		namespace: namespace,
-		language:  language,
-		ready:     ready,
-		registry:  reg,
-		executor:  exec,
 	}
 }

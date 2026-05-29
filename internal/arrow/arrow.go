@@ -9,87 +9,6 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/memory"
 )
 
-func ArrowArrayToSlice(arr arrow.Array) any {
-	switch a := arr.(type) {
-	case *array.Int8:
-		res := make([]int8, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Int16:
-		res := make([]int16, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Int32:
-		res := make([]int32, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Int64:
-		res := make([]int64, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Uint8:
-		res := make([]uint8, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Uint16:
-		res := make([]uint16, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Uint32:
-		res := make([]uint32, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Uint64:
-		res := make([]uint64, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Float32:
-		res := make([]float32, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Float64:
-		res := make([]float64, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Boolean:
-		res := make([]bool, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.String:
-		res := make([]string, a.Len())
-		for i := 0; i < a.Len(); i++ {
-			res[i] = a.Value(i)
-		}
-		return res
-	case *array.Struct:
-		return nil
-	default:
-		return nil
-	}
-}
-
 func SliceToArrowArray(sliceAny any) (arrow.Array, error) {
 	mem := memory.DefaultAllocator
 	switch s := sliceAny.(type) {
@@ -357,7 +276,7 @@ func AppendGoValueToBuilder(builder array.Builder, val reflect.Value) error {
 func ArrowStructToGoSlice(arr *array.Struct, elemType reflect.Type) reflect.Value {
 	n := arr.Len()
 	result := reflect.MakeSlice(reflect.SliceOf(elemType), n, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		elem := result.Index(i)
 		fieldIdx := 0
 		for j := 0; j < elemType.NumField(); j++ {

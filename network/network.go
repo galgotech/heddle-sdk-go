@@ -6,19 +6,12 @@ import (
 
 	"github.com/galgotech/heddle-sdk-go/internal/executor/execute"
 	"github.com/galgotech/heddle-sdk-go/internal/executor/history"
-	internalnetwork "github.com/galgotech/heddle-sdk-go/internal/network"
-	"github.com/galgotech/heddle-sdk-go/internal/registry"
+	"github.com/galgotech/heddle-sdk-go/internal/network"
+	"github.com/galgotech/heddle-sdk-go/plugin"
 )
 
-// Plugin represents the minimal interface required by the network client.
-type Plugin interface {
-	GetNamespace() string
-	GetReady() chan struct{}
-	Registry() registry.Registry
-}
-
 // Run initiates the worker's connection for one or more plugins concurrently.
-func Run(ctx context.Context, plugins ...Plugin) error {
+func Run(ctx context.Context, plugins ...*plugin.Plugin) error {
 	if len(plugins) == 0 {
 		return fmt.Errorf("no plugins provided")
 	}
@@ -27,21 +20,20 @@ func Run(ctx context.Context, plugins ...Plugin) error {
 	defer cancel()
 
 	errChan := make(chan error, len(plugins))
-
 	for _, p := range plugins {
-		go func(p Plugin) {
+		go func(p *plugin.Plugin) {
 			workerHistory := history.NewWorkerHistory()
-			exec := execute.NewWorkerExecutor(p.Registry(), workerHistory)
+			executor := execute.NewWorkerExecutor(p.Registry(), workerHistory)
 
-			client := internalnetwork.NewNetworkClient(
+			client := network.NewNetworkClient(
 				p.GetNamespace(),
-				"go",
+				plugin.Language,
 				p.GetReady(),
 				p.Registry(),
-				exec,
+				executor,
 			)
 
-			err := client.Start(ctx)
+			err := client.Run(ctx)
 			if err != nil {
 				errChan <- fmt.Errorf("plugin %s failed: %w", p.GetNamespace(), err)
 			} else {

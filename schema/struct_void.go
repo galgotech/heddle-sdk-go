@@ -1,3 +1,4 @@
 package schema
 
-type Void struct{}
+type Void struct {
+}

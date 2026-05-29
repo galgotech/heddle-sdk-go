@@ -8,7 +8,7 @@ import (
 
 type StepRegistration struct {
 	Name         string
-	StructVal    reflect.Value // pointer to struct
+	StructType   reflect.Type // pointer to struct
 	ConfigSchema schema.FieldSchema
 	ConfigType   reflect.Type  // struct
 	InputType    reflect.Type  // pointer to struct
@@ -24,15 +24,4 @@ type StepRegistration struct {
 
 	InputFieldsIndex  []int
 	OutputFieldsIndex []int
-}
-
-func (s *StepRegistration) initFrame(val reflect.Value, indices []int) {
-	v := val.Elem()
-
-	for _, i := range indices {
-		f := v.Field(i)
-		if f.Type().Kind() == reflect.Pointer {
-			f.Set(reflect.New(f.Type().Elem()))
-		}
-	}
 }

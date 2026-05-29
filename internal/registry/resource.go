@@ -9,7 +9,7 @@ import (
 type ResourceRegistration struct {
 	Name         string
 	FieldSchema  schema.FieldSchema
-	ResourceType reflect.Type // struct schema.Resource[T schema.ResourceInterface]
+	ResourceType reflect.Type // schema.Resource
 
 	Documentation string
 	SourceCode    string

@@ -2,30 +2,25 @@ package schema
 
 import "context"
 
-// ResourceDefinition represents an external dependency or stateful object
+// Resource represents an external dependency or stateful object
 // (e.g., database connection pool, API client) initialized by the Heddle runtime.
-type ResourceDefinition interface {
+type Resource interface {
 	Init(ctx context.Context) error
 	Close() error
 }
 
-type ResourceSetter interface {
-	SetResource(val any)
-}
-
-type Resource[T ResourceDefinition] struct {
+type ResourceSchema[T Resource] struct {
 	resource T
 }
 
-func (r Resource[T]) Get() T {
+func (r ResourceSchema[T]) Get() T {
 	return r.resource
 }
 
-func (r Resource[T]) IsResource() bool {
+func (r ResourceSchema[T]) IsResource() bool {
 	return true
 }
 
-func (r *Resource[T]) SetResource(val any) {
+func (r *ResourceSchema[T]) SetResource(val any) {
 	r.resource = val.(T)
 }
-

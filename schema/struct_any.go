@@ -1,63 +1,60 @@
 package schema
 
 import (
-	"github.com/apache/arrow/go/v18/arrow"
-	"github.com/galgotech/heddle-lang/pkg/logger"
-	"go.uber.org/zap"
+	"reflect"
 
 	"github.com/galgotech/heddle-sdk-go/internal/accessor"
-	internalarrow "github.com/galgotech/heddle-sdk-go/internal/arrow"
 )
 
 type Any struct {
-	columnsArr map[string]arrow.Array
-	idsArray   map[string]arrow.Array
+	cols map[string][]any
 }
 
-func (a *Any) Get(name string) (arrow.Array, bool) {
-	value, ok := a.columnsArr[name]
-	return value, ok
+func NewAnyAccessor(token accessor.Token, columns map[string][]any) *Any {
+	return &Any{cols: columns}
+}
+
+func NewAny(columns map[string]any) *Any {
+	res := make(map[string][]any)
+	for k, v := range columns {
+		if arr, ok := v.([]any); ok {
+			res[k] = arr
+		} else {
+			res[k] = packAnyToSlice(v)
+		}
+	}
+	return &Any{cols: res}
 }
 
 func (a *Any) Columns() []string {
-	columns := make([]string, 0, len(a.columnsArr))
-	for key := range a.columnsArr {
-		columns = append(columns, key)
+	names := make([]string, 0, len(a.cols))
+	for k := range a.cols {
+		names = append(names, k)
 	}
-	return columns
+	return names
 }
 
-func NewAny(data map[string]any) *Any {
-	typeAny := &Any{
-		columnsArr: make(map[string]arrow.Array, len(data)),
-		idsArray:   make(map[string]arrow.Array, len(data)),
+func (a *Any) Get(name string) ([]any, bool) {
+	if a == nil || a.cols == nil {
+		return nil, false
 	}
-
-	for key, value := range data {
-		var arr arrow.Array
-
-		if colAcc, ok := value.(ColAccessor); ok {
-			token := accessor.Token{}
-			arr = colAcc.GetArrowArray(token)
-
-		} else {
-			var err error
-			arr, err = internalarrow.SliceToArrowArray(value)
-			if err != nil {
-				logger.L().Fatal("failed to convert slice to arrow array", zap.Error(err))
-			}
-		}
-
-		typeAny.columnsArr[key] = arr
-	}
-
-	return typeAny
+	arr, ok := a.cols[name]
+	return arr, ok
 }
 
-func NewAnyAccessor(token accessor.Token, columns map[string]arrow.Array) *Any {
-	typeAny := &Any{
-		columnsArr: columns,
+func packAnyToSlice(val any) []any {
+	if val == nil {
+		return nil
+	}
+	v := reflect.ValueOf(val)
+	if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
+		return []any{val}
 	}
 
-	return typeAny
+	length := v.Len()
+	res := make([]any, length)
+	for i := range length {
+		res[i] = v.Index(i).Interface()
+	}
+	return res
 }

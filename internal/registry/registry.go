@@ -4,273 +4,156 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"maps"
-	"os"
 	"reflect"
-	"runtime"
-	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/galgotech/heddle-lang/pkg/logger"
-	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
+	"github.com/galgotech/heddle-lang/pkg/plugin"
 	"github.com/galgotech/heddle-lang/pkg/schema"
 
 	internalschema "github.com/galgotech/heddle-sdk-go/internal/schema"
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
+// Registry is the interface for registering steps and resources, resolving schemas, and managing resource lifetimes.
 type Registry interface {
-	Register(structStep any) error
+	Register(instance any) error
+	ResolveSchema(request plugin.ResolveSchemaRequest) plugin.ResolveSchemaResponse
 
-	ResolveSchema(request baseplugin.ResolveSchemaRequest) baseplugin.ResolveSchemaResponse
+	// Steps
 	GetStep(name string) (StepRegistration, bool)
-	GetResource(name string) (ResourceRegistration, bool)
 	AllSteps() map[string]StepRegistration
+
+	// Resources
+	GetResourceRegistration(name string) (ResourceRegistration, bool)
 	AllResources() map[string]ResourceRegistration
+
+	// Active Resource Instances (bindings)
+	InitResource(id string, resourceType string, config map[string]any) error
+	GetResource(id string) (any, error)
 	CloseAllResources()
-
-	GetResourceInstance(id string) (any, bool)
-	InitializeResource(id string, resourceType string, config map[string]any) (any, error)
-	SetResourceBinding(fieldName string, instanceID string)
-	GetResourceBinding(fieldName string) (string, bool)
+	StartResourceMonitor(timeout time.Duration)
 }
 
-type schemaRegistry struct {
-	resourceStates   map[string]pluginschema.ResourceDefinition
-	resources        map[string]ResourceRegistration
-	steps            map[string]StepRegistration
-	resourceBindings map[string]string
-	mu               sync.RWMutex
+type simpleRegistry struct {
+	mu sync.RWMutex
+
+	// key is the <namespace>.<struct_name>
+	resources map[string]ResourceRegistration
+	// key is the bind_name
+	resourceBinding map[string]*resourceWrapper
+
+	// key is the <namespace>.<method_name>
+	steps map[string]StepRegistration
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func (r *schemaRegistry) Register(instance any) error {
+func NewRegistry() Registry {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &simpleRegistry{
+		resources:       make(map[string]ResourceRegistration),
+		resourceBinding: make(map[string]*resourceWrapper),
+		steps:           make(map[string]StepRegistration),
+		ctx:             ctx,
+		cancel:          cancel,
+	}
+}
+
+func (r *simpleRegistry) Register(instance any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	pointerVal := reflect.ValueOf(instance)
-	pointerType := pointerVal.Type()
-
-	if pointerType.Kind() != reflect.Pointer {
-		return fmt.Errorf("Register: expected pointer to struct, got %s", pointerType.Kind())
+	structType, err := reflecStruct(instance)
+	if err != nil {
+		return err
 	}
-	if pointerType.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("Register: expected pointer to struct, got pointer to %s", pointerType.Elem().Kind())
-	}
-	structVal := pointerVal.Elem()
-	structType := pointerType.Elem()
 
 	// 1. Iterate over fields of groupType to find and register Resource fields
 	for fieldType := range structType.Fields() {
 		if internalschema.IsResource(fieldType.Type) {
-			// Initialize the internal state of the Resource field in prototype
-
-			// The underlying resource type R is field.Type.Field(0).Type
-			resourcePointerType := fieldType.Type.Field(0).Type
-			if resourcePointerType.Kind() != reflect.Pointer {
-				return fmt.Errorf("Register: expected pointer to struct, got pointer to %s", resourcePointerType.Kind())
-			}
-			resourceType := resourcePointerType.Elem()
-			resourceName := strings.ToLower(resourceType.Name())
-
-			if _, exists := r.resources[resourceName]; exists {
-				return fmt.Errorf("Resource %s already registered", resourceName)
-			}
-
-			resourceInstance := reflect.New(resourceType).Interface()
-			err := r.registerResourceLocked(resourceName, resourceInstance)
+			resource, err := reflectResource(fieldType)
 			if err != nil {
-				return fmt.Errorf("failed to register resource %s: %w", resourceName, err)
+				return fmt.Errorf("failed to reflect resource %s: %w", resource.Name, err)
 			}
+
+			if _, exists := r.resources[resource.Name]; exists {
+				return fmt.Errorf("Resource %s already registered", resource.Name)
+			}
+
+			r.resources[resource.Name] = resource
 		}
 	}
 
 	// 2. Iterate over methods of *groupType to register Steps
-	for method := range pointerType.Methods() {
-		methodType := method.Type // func(receiver, ctx, config, in) *out
-
+	for method := range structType.Methods() {
 		if method.Name == "ResolveTypeInput" || method.Name == "ResolveTypeOutput" {
 			logger.L().Debug("Skipping method %s", zap.String("method", method.Name))
 			continue
 		}
 
-		if methodType.NumIn() != 4 || methodType.NumOut() != 1 {
-			return fmt.Errorf("step %s has wrong signature: %s", method.Name, methodType.String())
-		}
-
-		ctxType := methodType.In(1)
-		configType := methodType.In(2)
-		inputType := methodType.In(3)
-		outputType := methodType.Out(0)
-
-		if !ctxType.Implements(reflect.TypeFor[context.Context]()) {
-			return fmt.Errorf("step %s first arg must be context.Context, got %s", method.Name, ctxType.String())
-		}
-		if configType.Kind() != reflect.Struct {
-			return fmt.Errorf("step %s config must be a pointer to a struct, got %s", method.Name, configType.String())
-		}
-		if inputType.Kind() != reflect.Pointer || inputType.Elem().Kind() != reflect.Struct {
-			return fmt.Errorf("step %s input must be a pointer to a struct, got %s", method.Name, inputType.String())
-		}
-		if outputType.Kind() != reflect.Pointer || outputType.Elem().Kind() != reflect.Struct {
-			return fmt.Errorf("step %s output must be a pointer to a struct, got %s", method.Name, outputType.String())
-		}
-
-		stepConfigSchema, err := internalschema.ExtractFieldSchema(configType)
+		step, err := reflectFunctionStep(structType, method)
 		if err != nil {
-			return fmt.Errorf("step config schema for %s: %w", method.Name, err)
+			return fmt.Errorf("failed to reflect step %s: %w", method.Name, err)
 		}
 
-		// Step name is converted from CamelCase/PascalCase to snake_case.
-		stepName := toSnakeCase(method.Name)
-
-		inputSchema, err := internalschema.ExtractInputOutputSchema(inputType)
-		if err != nil {
-			return fmt.Errorf("step %q input: %w", stepName, err)
+		if existing, conflict := r.steps[step.Name]; conflict {
+			return fmt.Errorf(
+				"step %q already registered from %s (conflict with %s.%s)",
+				step.Name,
+				existing.SourceFile,
+				structType.Name(),
+				method.Name,
+			)
 		}
 
-		outputSchema, err := internalschema.ExtractInputOutputSchema(outputType)
-		if err != nil {
-			return fmt.Errorf("step %q output: %w", stepName, err)
-		}
-
-		inputFieldsIndex := []int{}
-		if inputType.Elem() != reflect.TypeFor[pluginschema.Any]() {
-			for j := 0; j < inputType.Elem().NumField(); j++ {
-				f := inputType.Elem().Field(j)
-				if internalschema.IsCol(f.Type) && !f.Anonymous {
-					inputFieldsIndex = append(inputFieldsIndex, j)
-				}
-			}
-		}
-
-		outputFieldsIndex := []int{}
-		if outputType.Elem() != reflect.TypeFor[pluginschema.Any]() {
-			for j := 0; j < outputType.Elem().NumField(); j++ {
-				f := outputType.Elem().Field(j)
-				if !f.Anonymous {
-					outputFieldsIndex = append(outputFieldsIndex, j)
-				}
-			}
-		}
-
-		doc, code, file, line := extractFuncMetadata(method.Func.Pointer())
-		if existing, conflict := r.steps[stepName]; conflict {
-			return fmt.Errorf("step %q already registered from %s (conflict with %s.%s)",
-				stepName, existing.SourceFile,
-				structType.Name(), method.Name)
-		}
-
-		logger.L().Debug("Registering method step", zap.String("name", stepName))
-		r.steps[stepName] = StepRegistration{
-			StructVal:         structVal,
-			Name:              stepName,
-			Func:              method.Func,
-			ConfigSchema:      stepConfigSchema,
-			ConfigType:        configType,
-			InputSchema:       inputSchema,
-			InputType:         inputType,
-			OutputSchema:      outputSchema,
-			OutputType:        outputType,
-			Documentation:     doc,
-			SourceCode:        code,
-			SourceFile:        file,
-			SourceLine:        line,
-			InputFieldsIndex:  inputFieldsIndex,
-			OutputFieldsIndex: outputFieldsIndex,
-		}
+		r.steps[step.Name] = step
 	}
 
 	return nil
 }
 
-func (r *schemaRegistry) registerResourceLocked(name string, resource any) error {
-	resourcePointerType := reflect.TypeOf(resource)
-	if resourcePointerType.Kind() != reflect.Pointer {
-		return fmt.Errorf("resource %q must be a pointer to a struct", name)
-	}
-	if resourcePointerType.Elem().Kind() != reflect.Struct {
-		logger.L().Error("Failed to register resource, it is not a pointer to a struct", zap.String("resource", name))
-		return fmt.Errorf("resource %q must be a struct or a pointer to a struct", name)
-	}
-
-	// Validate that the pointer to this struct implements the Resource interface
-	if !resourcePointerType.Implements(reflect.TypeFor[pluginschema.ResourceDefinition]()) {
-		logger.L().Error("Failed to register resource, it does not implement the Resource interface", zap.String("resource", name))
-		return fmt.Errorf("resource %q (pointer type %s) must implement the Resource interface", name, resourcePointerType)
-	}
-
-	fieldSchema, err := internalschema.ExtractFieldSchema(resourcePointerType.Elem())
-	if err != nil {
-		logger.L().Error("Failed to extract resource schema", zap.String("resource", name), zap.Error(err))
-		return fmt.Errorf("resource %q config: %w", name, err)
-	}
-
-	// Use reflection on reflect.New(typ) to find the Start method pointer for metadata extraction
-	var fnPtr uintptr
-	dummyVal := reflect.New(resourcePointerType)
-	if v := dummyVal.MethodByName("Init"); v.IsValid() {
-		fnPtr = v.Pointer()
-	}
-	doc, code, file, line := extractFuncMetadata(fnPtr)
-
-	r.resources[name] = ResourceRegistration{
-		Name:         name,
-		FieldSchema:  fieldSchema,
-		ResourceType: resourcePointerType,
-
-		Documentation: doc,
-		SourceCode:    code,
-		SourceFile:    file,
-		SourceLine:    line,
-	}
-
-	return nil
-}
-
-func (r *schemaRegistry) ResolveSchema(req baseplugin.ResolveSchemaRequest) baseplugin.ResolveSchemaResponse {
+func (r *simpleRegistry) ResolveSchema(request plugin.ResolveSchemaRequest) plugin.ResolveSchemaResponse {
 	r.mu.RLock()
-	targetStep, ok := r.steps[req.StepName]
+	targetStep, ok := r.steps[request.StepName]
 	r.mu.RUnlock()
 
 	if !ok {
-		return baseplugin.ResolveSchemaResponse{Error: fmt.Sprintf("step %s not found", req.StepName)}
+		return plugin.ResolveSchemaResponse{Error: fmt.Sprintf("step %s not found", request.StepName)}
 	}
 
 	configVal := reflect.New(targetStep.ConfigType)
-	if req.ConfigJSON != "" {
-		if err := json.Unmarshal([]byte(req.ConfigJSON), configVal.Interface()); err != nil {
-			return baseplugin.ResolveSchemaResponse{Error: fmt.Sprintf("failed to unmarshal config: %v", err)}
+	if request.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(request.ConfigJSON), configVal.Interface()); err != nil {
+			return plugin.ResolveSchemaResponse{Error: fmt.Sprintf("failed to unmarshal config: %v", err)}
 		}
 	}
 
 	inputSchema := targetStep.InputSchema
 	outputSchema := targetStep.OutputSchema
 
-	ptrType := reflect.PointerTo(targetStep.StructVal.Type())
+	structVal := reflect.New(targetStep.StructType).Elem()
+	ctxVal := reflect.ValueOf(context.Background())
+	configArg := configVal.Elem()
 
+	// TODO: retirar essa vlidação nessa etapa e passar para o momento do registro,
+	// e usar a schema ja definida no step
 	// Resolve dynamic input schema using method ResolveInput on the group receiver
-	if method, ok := ptrType.MethodByName("ResolveTypeInput"); ok {
-		receiverVal := reflect.New(targetStep.StructVal.Type())
-		receiverVal.Elem().Set(targetStep.StructVal)
-		ctxVal := reflect.ValueOf(context.Background())
-		configArg := configVal.Elem()
-		if method.Type.In(2).Kind() == reflect.Pointer {
-			configArg = configVal
-		}
+	if method, ok := targetStep.StructType.MethodByName("ResolveTypeInput"); ok {
 		results := method.Func.Call([]reflect.Value{
-			receiverVal,
+			structVal,
 			ctxVal,
 			configArg,
-			reflect.ValueOf(req.StepName),
+			reflect.ValueOf(request.StepName),
 		})
 		if len(results) == 2 {
 			if !results[1].IsNil() {
-				return baseplugin.ResolveSchemaResponse{Error: results[1].Interface().(error).Error()}
+				return plugin.ResolveSchemaResponse{Error: results[1].Interface().(error).Error()}
 			}
 			var cols []pluginschema.ColSchema
 			if !results[0].IsNil() {
@@ -280,24 +163,19 @@ func (r *schemaRegistry) ResolveSchema(req baseplugin.ResolveSchemaRequest) base
 		}
 	}
 
+	// TODO: retirar essa vlidação nessa etapa e passar para o momento do registro,
+	// e usar a schema ja definida no step
 	// Resolve dynamic output schema using method ResolveOutput on the group receiver
-	if method, ok := ptrType.MethodByName("ResolveTypeOutput"); ok {
-		receiverVal := reflect.New(targetStep.StructVal.Type())
-		receiverVal.Elem().Set(targetStep.StructVal)
-		ctxVal := reflect.ValueOf(context.Background())
-		configArg := configVal.Elem()
-		if method.Type.In(2).Kind() == reflect.Pointer {
-			configArg = configVal
-		}
+	if method, ok := targetStep.StructType.MethodByName("ResolveTypeOutput"); ok {
 		results := method.Func.Call([]reflect.Value{
-			receiverVal,
+			structVal,
 			ctxVal,
 			configArg,
-			reflect.ValueOf(req.StepName),
+			reflect.ValueOf(request.StepName),
 		})
 		if len(results) == 2 {
 			if !results[1].IsNil() {
-				return baseplugin.ResolveSchemaResponse{Error: results[1].Interface().(error).Error()}
+				return plugin.ResolveSchemaResponse{Error: results[1].Interface().(error).Error()}
 			}
 			var cols []pluginschema.ColSchema
 			if !results[0].IsNil() {
@@ -307,76 +185,120 @@ func (r *schemaRegistry) ResolveSchema(req baseplugin.ResolveSchemaRequest) base
 		}
 	}
 
-	return baseplugin.ResolveSchemaResponse{
+	return plugin.ResolveSchemaResponse{
 		Input:  inputSchema,
 		Output: outputSchema,
 	}
 }
 
-func (r *schemaRegistry) GetStep(name string) (StepRegistration, bool) {
+func (r *simpleRegistry) InitResource(id string, resourceType string, config map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.resourceBinding[id]; exists {
+		return nil
+	}
+
+	reg, ok := r.resources[resourceType]
+	if !ok {
+		return fmt.Errorf("resource type %q not registered", resourceType)
+	}
+
+	structPtrVal := reflect.New(reg.ResourceType)
+	configBytes, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	if len(config) > 0 {
+		if err := json.Unmarshal(configBytes, structPtrVal.Interface()); err != nil {
+			return fmt.Errorf("failed to unmarshal config into resource: %w", err)
+		}
+	}
+	kind := structPtrVal.Elem().Kind()
+	_ = kind
+
+	inst, ok := structPtrVal.Interface().(pluginschema.Resource)
+	if !ok {
+		return fmt.Errorf("resource type %q does not implement Resource", resourceType)
+	}
+
+	if err := inst.Init(context.Background()); err != nil {
+		return fmt.Errorf("failed to initialize resource: %w", err)
+	}
+
+	wrapper := &resourceWrapper{
+		instance: inst,
+	}
+	wrapper.updateLastUsed()
+
+	r.resourceBinding[id] = wrapper
+
+	return nil
+}
+
+func (r *simpleRegistry) GetResource(id string) (any, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	wrapper, exists := r.resourceBinding[id]
+	if !exists {
+		return nil, fmt.Errorf("resource binding %s not initialized", id)
+	}
+
+	wrapper.updateLastUsed()
+	return wrapper.instance, nil
+}
+
+func (r *simpleRegistry) CloseAllResources() {
+	r.cancel()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for id, wrapper := range r.resourceBinding {
+		_ = wrapper.instance.Close()
+		delete(r.resourceBinding, id)
+	}
+}
+
+func (r *simpleRegistry) StartResourceMonitor(timeout time.Duration) {
+	go func() {
+		ticker := time.NewTicker(timeout / 2)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.ctx.Done():
+				return
+			case <-ticker.C:
+				r.evictTimedOutResources(timeout)
+			}
+		}
+	}()
+}
+
+func (r *simpleRegistry) evictTimedOutResources(timeout time.Duration) {
+	r.mu.Lock()
+	var toClose []pluginschema.Resource
+	for id, wrapper := range r.resourceBinding {
+		if wrapper.isTimedOut(timeout) {
+			toClose = append(toClose, wrapper.instance)
+			delete(r.resourceBinding, id)
+		}
+	}
+	r.mu.Unlock()
+
+	for _, res := range toClose {
+		_ = res.Close()
+	}
+}
+
+func (r *simpleRegistry) GetStep(name string) (StepRegistration, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	step, ok := r.steps[name]
 	return step, ok
 }
 
-func (r *schemaRegistry) GetResource(name string) (ResourceRegistration, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	res, ok := r.resources[name]
-	return res, ok
-}
-
-func (r *schemaRegistry) GetResourceInstance(id string) (any, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	inst, ok := r.resourceStates[id]
-	return inst, ok
-}
-
-func (r *schemaRegistry) InitializeResource(id string, resourceType string, config map[string]any) (any, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if inst, exists := r.resourceStates[id]; exists {
-		return inst, nil
-	}
-
-	reg, ok := r.resources[resourceType]
-	if !ok {
-		return nil, fmt.Errorf("resource type %q not registered", resourceType)
-	}
-
-	structPtrVal := reflect.New(reg.ResourceType.Elem())
-
-	configBytes, err := json.Marshal(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal config: %w", err)
-	}
-	if len(config) > 0 {
-		if err := json.Unmarshal(configBytes, structPtrVal.Interface()); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal config into resource: %w", err)
-		}
-	}
-
-	inst, ok := structPtrVal.Interface().(pluginschema.ResourceDefinition)
-	if !ok {
-		return nil, fmt.Errorf("resource type %q does not implement ResourceDefinition", resourceType)
-	}
-
-	if err := inst.Init(context.Background()); err != nil {
-		return nil, fmt.Errorf("failed to initialize resource: %w", err)
-	}
-
-	if r.resourceStates == nil {
-		r.resourceStates = make(map[string]pluginschema.ResourceDefinition)
-	}
-	r.resourceStates[id] = inst
-
-	return inst, nil
-}
-
-func (r *schemaRegistry) AllSteps() map[string]StepRegistration {
+func (r *simpleRegistry) AllSteps() map[string]StepRegistration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -387,82 +309,20 @@ func (r *schemaRegistry) AllSteps() map[string]StepRegistration {
 	return stepsCopy
 }
 
-func (r *schemaRegistry) AllResources() map[string]ResourceRegistration {
+func (r *simpleRegistry) GetResourceRegistration(name string) (ResourceRegistration, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	res, ok := r.resources[name]
+	return res, ok
+}
+
+func (r *simpleRegistry) AllResources() map[string]ResourceRegistration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	resourcesCopy := make(map[string]ResourceRegistration, len(r.resources))
 	maps.Copy(resourcesCopy, r.resources)
 	return resourcesCopy
-}
-
-func (r *schemaRegistry) CloseAllResources() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for id, inst := range r.resourceStates {
-		_ = inst.Close()
-		delete(r.resourceStates, id)
-	}
-}
-
-func extractFuncMetadata(fnPtr uintptr) (doc string, code string, file string, line int) {
-	f := runtime.FuncForPC(fnPtr)
-	if f == nil {
-		return
-	}
-	file, line = f.FileLine(fnPtr)
-
-	// Try to read the source file
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return
-	}
-
-	fset := token.NewFileSet()
-	// Parse the file to get AST and comments
-	node, err := parser.ParseFile(fset, file, data, parser.ParseComments)
-	if err != nil {
-		return
-	}
-
-	for _, decl := range node.Decls {
-		switch d := decl.(type) {
-		case *ast.FuncDecl:
-			// Check if this function corresponds to our line
-			startLine := fset.Position(d.Pos()).Line
-			endLine := fset.Position(d.End()).Line
-			if startLine <= line && endLine >= line {
-				if d.Doc != nil {
-					doc = d.Doc.Text()
-				}
-				// Extract source code of the function
-				start := fset.Position(d.Pos()).Offset
-				end := fset.Position(d.End()).Offset
-				code = string(data[start:end])
-				return
-			}
-		case *ast.GenDecl:
-			// Handle types (Resources)
-			for _, spec := range d.Specs {
-				if tSpec, ok := spec.(*ast.TypeSpec); ok {
-					startLine := fset.Position(tSpec.Pos()).Line
-					endLine := fset.Position(tSpec.End()).Line
-					if startLine <= line && endLine >= line {
-						if d.Doc != nil {
-							doc = d.Doc.Text()
-						}
-						// Extract source code of the type declaration
-						start := fset.Position(d.Pos()).Offset
-						end := fset.Position(d.End()).Offset
-						code = string(data[start:end])
-						return
-					}
-				}
-			}
-		}
-	}
-	return
 }
 
 func convertColSchemaToFrameSchema(cols []pluginschema.ColSchema) schema.FrameSchema {
@@ -479,40 +339,5 @@ func convertColSchemaToFrameSchema(cols []pluginschema.ColSchema) schema.FrameSc
 	}
 	return schema.FrameSchema{
 		Fields: fields,
-	}
-}
-
-func (r *schemaRegistry) SetResourceBinding(fieldName string, instanceID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.resourceBindings == nil {
-		r.resourceBindings = make(map[string]string)
-	}
-	r.resourceBindings[fieldName] = instanceID
-}
-
-func (r *schemaRegistry) GetResourceBinding(fieldName string) (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.resourceBindings == nil {
-		return "", false
-	}
-	if id, ok := r.resourceBindings[fieldName]; ok {
-		return id, true
-	}
-	for k, v := range r.resourceBindings {
-		if strings.EqualFold(k, fieldName) {
-			return v, true
-		}
-	}
-	return "", false
-}
-
-func NewRegistry() Registry {
-	return &schemaRegistry{
-		resources:        make(map[string]ResourceRegistration),
-		steps:            make(map[string]StepRegistration),
-		resourceStates:   make(map[string]pluginschema.ResourceDefinition),
-		resourceBindings: make(map[string]string),
 	}
 }

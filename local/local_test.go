@@ -17,37 +17,33 @@ type ConfigA struct {
 }
 
 type InputA struct {
-	InVal *schema.ColString
+	InVal string
 }
 
 type OutputA struct {
-	OutVal *schema.ColString
+	OutVal string
 }
 
 type PluginASteps struct{}
 
-func (s *PluginASteps) StepA(ctx context.Context, cfg ConfigA, in *InputA) *OutputA {
-	numRows := in.InVal.Len()
-	res := make([]string, numRows)
-	for i := 0; i < numRows; i++ {
-		res[i] = in.InVal.Value(i) + "_pA"
-	}
-	return &OutputA{
-		OutVal: schema.NewColString(res),
-	}
+func (s *PluginASteps) StepA(ctx context.Context, cfg ConfigA, in schema.Frame[InputA], out schema.Frame[OutputA]) error {
+	in.Each(func(item InputA) {
+		out.Add(OutputA{
+			OutVal: item.InVal + "_pA",
+		})
+	})
+	return nil
 }
 
 type PluginBSteps struct{}
 
-func (s *PluginBSteps) StepB(ctx context.Context, cfg ConfigA, in *OutputA) *OutputA {
-	numRows := in.OutVal.Len()
-	res := make([]string, numRows)
-	for i := 0; i < numRows; i++ {
-		res[i] = in.OutVal.Value(i) + "_pB"
-	}
-	return &OutputA{
-		OutVal: schema.NewColString(res),
-	}
+func (s *PluginBSteps) StepB(ctx context.Context, cfg ConfigA, in schema.Frame[OutputA], out schema.Frame[OutputA]) error {
+	in.Each(func(item OutputA) {
+		out.Add(OutputA{
+			OutVal: item.OutVal + "_pB",
+		})
+	})
+	return nil
 }
 
 func TestLocalRunnerMultiplePlugins(t *testing.T) {
@@ -63,19 +59,27 @@ func TestLocalRunnerMultiplePlugins(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Run StepA on PluginA using fully-qualified namespaced step name
-	inA := &InputA{
-		InVal: schema.NewColString([]string{"test"}),
-	}
+	inA, _ := schema.NewFrame([]InputA{{InVal: "test"}})
 	resA := runner.Execute(ctx, "pluginA.step_a", ConfigA{Param: "xyz"}, inA)
 	require.NotNil(t, resA)
-	outA, ok := resA.(*OutputA)
+
+	outA, ok := resA.(schema.Frame[OutputA])
 	require.True(t, ok)
-	assert.Equal(t, "test_pA", outA.OutVal.Value(0))
+	var valA string
+	outA.Each(func(item OutputA) {
+		valA = item.OutVal
+	})
+	assert.Equal(t, "test_pA", valA)
 
 	// 2. Run StepB on PluginB using fully-qualified namespaced step name (auto-chaining via history / simulated SHM)
 	resB := runner.Execute(ctx, "pluginB.step_b", ConfigA{Param: "xyz"}, nil)
 	require.NotNil(t, resB)
-	outB, ok := resB.(*OutputA)
+
+	outB, ok := resB.(schema.Frame[OutputA])
 	require.True(t, ok)
-	assert.Equal(t, "test_pA_pB", outB.OutVal.Value(0))
+	var valB string
+	outB.Each(func(item OutputA) {
+		valB = item.OutVal
+	})
+	assert.Equal(t, "test_pA_pB", valB)
 }

@@ -11,29 +11,29 @@ import (
 )
 
 type SchemaTable struct {
-	ID     pluginschema.ColInt64
-	Email  pluginschema.ColString
-	Active pluginschema.ColBoolean
+	ID     int64
+	Email  string
+	Active bool
 }
 
 func TestExtractSchema(t *testing.T) {
 	// 1. Extract schema from struct
-	s, err := ExtractInputOutputSchema(reflect.TypeFor[*SchemaTable]())
+	s, err := ExtractSchema(reflect.TypeFor[SchemaTable]())
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
 	// 2. Validate fields
 	assert.Equal(t, 3, len(s.Fields))
 
-	// Field 0: ID (with tag)
+	// Field 0: ID
 	assert.Equal(t, "ID", s.Fields[0].Name)
 	assert.Equal(t, "int64", s.Fields[0].ArrowType)
 
-	// Field 1: Email (with tag)
+	// Field 1: Email
 	assert.Equal(t, "Email", s.Fields[1].Name)
 	assert.Equal(t, "utf8", s.Fields[1].ArrowType)
 
-	// Field 2: Active (no tag)
+	// Field 2: Active
 	assert.Equal(t, "Active", s.Fields[2].Name)
 	assert.Equal(t, "bool", s.Fields[2].ArrowType)
 }
@@ -43,11 +43,11 @@ type MySubStruct struct {
 }
 
 type SchemaTableWithStruct struct {
-	Nested pluginschema.ColStruct[MySubStruct]
+	Nested pluginschema.Frame[MySubStruct]
 }
 
 func TestExtractSchema_Struct(t *testing.T) {
-	s, err := ExtractInputOutputSchema(reflect.TypeFor[*SchemaTableWithStruct]())
+	s, err := ExtractSchema(reflect.TypeFor[SchemaTableWithStruct]())
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
@@ -58,18 +58,18 @@ func TestExtractSchema_Struct(t *testing.T) {
 
 func TestExtractConfigSchema(t *testing.T) {
 	type ConfigTest struct {
-		Name    string `json:"name"`
-		Timeout int    `json:"timeout"`
-		Hidden  string `json:"-"`
+		Name    string
+		Timeout int
+		hidden  string
 	}
 
 	s, err := ExtractFieldSchema(reflect.TypeFor[ConfigTest]())
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
-	assert.Equal(t, 2, len(s.Fields))
-	assert.Equal(t, "name", s.Fields[0].Name)
+	assert.Equal(t, 3, len(s.Fields))
+	assert.Equal(t, "Name", s.Fields[0].Name)
 	assert.Equal(t, "string", s.Fields[0].Type)
-	assert.Equal(t, "timeout", s.Fields[1].Name)
+	assert.Equal(t, "Timeout", s.Fields[1].Name)
 	assert.Equal(t, "int", s.Fields[1].Type)
 }

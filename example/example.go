@@ -33,50 +33,56 @@ type QueryConfig struct {
 	Query string `json:"query"`
 }
 
+type SubInput struct {
+	Name string
+}
+
 // QueryInput represents the input columnar structure containing inputs like `@user_id`.
 type QueryInput struct {
-	UserID *schema.ColString
+	UserID int64
+
+	SubInput schema.Frame[SubInput]
 }
 
 // QueryOutput represents the returned output frame schemas.
 type QueryOutput struct {
-	UserID  *schema.ColInt64
-	Country *schema.ColString
+	UserID  int64
+	Country string
 }
 
 // Steps groups all step methods and binds stateful resources.
 type Steps struct {
-	DB schema.Resource[*Connection]
+	DB schema.ResourceSchema[*Connection]
+}
+
+func (s *Steps) TestProducer(ctx context.Context, config QueryConfig, in schema.Void, out schema.Frame[QueryOutput]) error {
+	queryOutput := QueryOutput{
+		UserID:  1,
+		Country: "Brasil",
+	}
+	out.Add(queryOutput)
+	return nil
 }
 
 // Query implements the `pg.query` step behavior.
-func (s *Steps) Query(ctx context.Context, config QueryConfig, in *QueryInput) *QueryOutput {
+func (s *Steps) Query(ctx context.Context, config QueryConfig, in schema.Frame[QueryInput], out schema.Frame[QueryOutput]) error {
 	conn := s.DB.Get()
 	if conn == nil {
-		logger.L().Error("PostgreSQL connection DB resource is not initialized or bound!")
-		return &QueryOutput{}
+		return fmt.Errorf("PostgreSQL connection DB resource is not initialized or bound!")
 	}
 
-	numRows := in.UserID.Len()
-	userIDs := make([]int64, numRows)
-	countries := make([]string, numRows)
+	in.Each(func(item QueryInput) {
+		output := QueryOutput{}
+		output.UserID = item.UserID
+		output.Country = fmt.Sprintf("US (resolved via %s)", conn.Host)
 
-	for i := 0; i < numRows; i++ {
-		idStr := in.UserID.Value(i)
-		var id int64
-		_, _ = fmt.Sscan(idStr, &id)
-		if id == 0 {
-			id = int64(i + 1)
-		}
-		userIDs[i] = id
-		// Map connection host to mock country for demo
-		countries[i] = fmt.Sprintf("US (resolved via %s)", conn.Host)
-	}
+		out.Add(output)
+		item.SubInput.Each(func(subItem SubInput) {
+			_ = subItem.Name
+		})
+	})
 
-	return &QueryOutput{
-		UserID:  schema.NewColInt64(userIDs),
-		Country: schema.NewColString(countries),
-	}
+	return nil
 }
 
 // Start registers step dependencies and boots up standard network/gRPC Worker coordination.
@@ -103,31 +109,37 @@ func Run() {
 	}
 
 	// resource test = pg.connection { host: "pg.internal" }
-	configResource := map[string]string{"host": "pg.internal"}
-	err = p.ResourceInstance("test", "pg.connection", configResource)
+	configResource := map[string]any{"host": "pg.internal"}
+	err = p.ResourceInstance("DB", "pg.connection", configResource)
 	if err != nil {
 		logger.L().Error("Failed to create resource instance", zap.Error(err))
 	}
 
 	// step fetch_user_data = <DB=test> ...
-	p.ResourceSet("DB", "pg.test")
+	// p.ResourceSet("DB", "pg.test")
 
 	// pg.query { query: "SELECT id AS user_id, country FROM users WHERE id = @user_id" }
 	c := QueryConfig{
 		Query: "SELECT id AS user_id, country FROM users WHERE id = @user_id",
 	}
+
 	input := QueryInput{
-		UserID: schema.NewColString([]string{"123", "456"}),
+		UserID: 123,
 	}
+
+	ref, _ := schema.NewFrame([]QueryInput{input})
 
 	ctx := context.Background()
 	exec := local.NewLocalRunner(p)
-	output := exec.Execute(ctx, "query", c, &input)
+	output := exec.Execute(ctx, "query", c, ref)
 	fmt.Printf("\n--- Step Direct Execution Result ---\n")
-	if out, ok := output.(*QueryOutput); ok {
-		for i := 0; i < out.UserID.Len(); i++ {
-			fmt.Printf("Row %d: UserID=%d, Country=%s\n", i, out.UserID.Value(i), out.Country.Value(i))
-		}
+
+	if out, ok := output.(schema.Frame[QueryOutput]); ok {
+		rowIdx := 0
+		out.Each(func(item QueryOutput) {
+			fmt.Printf("Row %d: UserID=%d, Country=%s\n", rowIdx, item.UserID, item.Country)
+			rowIdx++
+		})
 	}
 	fmt.Printf("-------------------------------------\n\n")
 }

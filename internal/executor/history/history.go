@@ -23,6 +23,7 @@ type LocalHistory interface {
 
 // WorkerHistoryEntry represents metadata for a task executed via worker.
 type WorkerHistoryEntry struct {
+	WorkflowID    string            `json:"workflow_id"`
 	TaskID        string            `json:"task_id"`
 	StepName      string            `json:"step_name"`
 	Status        string            `json:"status"`

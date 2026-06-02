@@ -33,6 +33,7 @@ func reflectResource(fieldType reflect.StructField) (ResourceRegistration, error
 	if resourcePointerType.Kind() != reflect.Pointer {
 		return ResourceRegistration{}, fmt.Errorf("Register: expected pointer to struct, got %s", resourcePointerType.Kind())
 	}
+
 	if resourcePointerType.Elem().Kind() != reflect.Struct {
 		return ResourceRegistration{}, fmt.Errorf("resource %q must pointer to a struct, got pointer to %s", fieldType.Name, resourcePointerType.Elem().Kind())
 	}
@@ -45,10 +46,12 @@ func reflectResource(fieldType reflect.StructField) (ResourceRegistration, error
 		return ResourceRegistration{}, fmt.Errorf("resource %q config: %w", resourceName, err)
 	}
 
-	var docText string
-	var sourceCode string
-	var sourceFile string
-	var sourceLine int
+	var (
+		docText    string
+		sourceCode string
+		sourceFile string
+		sourceLine int
+	)
 
 	if method, ok := resourcePointerType.MethodByName("Init"); ok {
 		pc := method.Func.Pointer()
@@ -66,6 +69,7 @@ func reflectResource(fieldType reflect.StructField) (ResourceRegistration, error
 							if !ok || genDecl.Tok != token.TYPE {
 								continue
 							}
+
 							for _, spec := range genDecl.Specs {
 								typeSpec, ok := spec.(*ast.TypeSpec)
 								if !ok || typeSpec.Name.Name != resourceType.Name() {
@@ -82,13 +86,16 @@ func reflectResource(fieldType reflect.StructField) (ResourceRegistration, error
 								if doc != nil {
 									docText = doc.Text()
 								}
+
 								sourceLine = fset.Position(genDecl.Pos()).Line
 
 								startPos := fset.Position(genDecl.Pos()).Offset
+
 								endPos := fset.Position(genDecl.End()).Offset
 								if startPos >= 0 && endPos <= len(data) && startPos < endPos {
 									sourceCode = string(data[startPos:endPos])
 								}
+
 								break
 							}
 						}
@@ -125,15 +132,19 @@ func reflectFunctionStep(structType reflect.Type, method reflect.Method) (StepRe
 	if !ctxType.Implements(reflect.TypeFor[context.Context]()) {
 		return StepRegistration{}, fmt.Errorf("step %s first arg must be context.Context, got %s", method.Name, ctxType.String())
 	}
+
 	if configType.Kind() != reflect.Struct {
 		return StepRegistration{}, fmt.Errorf("step %s config must be a struct, got %s", method.Name, configType.String())
 	}
+
 	if !schema.IsRef(inputType) {
 		return StepRegistration{}, fmt.Errorf("step %s input must be a Ref, got %s", method.Name, inputType.String())
 	}
+
 	if !schema.IsRef(outputType) {
 		return StepRegistration{}, fmt.Errorf("step %s output must be a Ref, got %s", method.Name, outputType.String())
 	}
+
 	if !returnType.Implements(reflect.TypeFor[error]()) {
 		return StepRegistration{}, fmt.Errorf("step %s return type must implement error, got %s", method.Name, returnType.String())
 	}
@@ -159,10 +170,12 @@ func reflectFunctionStep(structType reflect.Type, method reflect.Method) (StepRe
 	inputFieldsIndex := []int{}
 	outputFieldsIndex := []int{}
 
-	var docText string
-	var sourceCode string
-	var sourceFile string
-	var sourceLine int
+	var (
+		docText    string
+		sourceCode string
+		sourceFile string
+		sourceLine int
+	)
 
 	pc := method.Func.Pointer()
 	if fn := runtime.FuncForPC(pc); fn != nil {
@@ -179,11 +192,15 @@ func reflectFunctionStep(structType reflect.Type, method reflect.Method) (StepRe
 						if !ok || funcDecl.Name.Name != method.Name {
 							continue
 						}
+
 						if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
 							continue
 						}
+
 						recvTypeNode := funcDecl.Recv.List[0].Type
+
 						var recvName string
+
 						switch t := recvTypeNode.(type) {
 						case *ast.Ident:
 							recvName = t.Name
@@ -192,6 +209,7 @@ func reflectFunctionStep(structType reflect.Type, method reflect.Method) (StepRe
 								recvName = ident.Name
 							}
 						}
+
 						if recvName != structType.Name() {
 							continue
 						}
@@ -200,13 +218,16 @@ func reflectFunctionStep(structType reflect.Type, method reflect.Method) (StepRe
 						if funcDecl.Doc != nil {
 							docText = funcDecl.Doc.Text()
 						}
+
 						sourceLine = fset.Position(funcDecl.Pos()).Line
 
 						startPos := fset.Position(funcDecl.Pos()).Offset
+
 						endPos := fset.Position(funcDecl.End()).Offset
 						if startPos >= 0 && endPos <= len(data) && startPos < endPos {
 							sourceCode = string(data[startPos:endPos])
 						}
+
 						break
 					}
 				}
@@ -215,6 +236,7 @@ func reflectFunctionStep(structType reflect.Type, method reflect.Method) (StepRe
 	}
 
 	logger.L().Debug("Registering method step", zap.String("name", stepName))
+
 	return StepRegistration{
 		StructType:        structType,
 		Name:              stepName,
@@ -232,5 +254,4 @@ func reflectFunctionStep(structType reflect.Type, method reflect.Method) (StepRe
 		InputFieldsIndex:  inputFieldsIndex,
 		OutputFieldsIndex: outputFieldsIndex,
 	}, nil
-
 }

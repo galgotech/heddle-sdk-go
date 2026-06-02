@@ -51,10 +51,12 @@ func (r *LocalRunner) Execute(ctx context.Context, stepName string, configJSON a
 		InputRef:   inputReferences,
 		Resources:  resources,
 	}
+
 	res, err := r.localExecutor.Execute(ctx, localInput)
 	if err != nil {
 		logger.L().Fatal("error executing step", zap.Error(err))
 	}
+
 	return res.OutputRef
 }
 

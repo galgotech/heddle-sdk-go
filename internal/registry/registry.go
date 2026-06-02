@@ -56,6 +56,7 @@ type simpleRegistry struct {
 
 func NewRegistry() Registry {
 	ctx, cancel := context.WithCancel(context.Background())
+
 	return &simpleRegistry{
 		resources:       make(map[string]ResourceRegistration),
 		resourceBinding: make(map[string]*resourceWrapper),
@@ -155,10 +156,12 @@ func (r *simpleRegistry) ResolveSchema(request plugin.ResolveSchemaRequest) plug
 			if !results[1].IsNil() {
 				return plugin.ResolveSchemaResponse{Error: results[1].Interface().(error).Error()}
 			}
-			var cols []pluginschema.ColSchema
+
+			var cols []schema.ColumnSchema
 			if !results[0].IsNil() {
-				cols = results[0].Interface().([]pluginschema.ColSchema)
+				cols = results[0].Interface().([]schema.ColumnSchema)
 			}
+
 			inputSchema = convertColSchemaToFrameSchema(cols)
 		}
 	}
@@ -177,10 +180,12 @@ func (r *simpleRegistry) ResolveSchema(request plugin.ResolveSchemaRequest) plug
 			if !results[1].IsNil() {
 				return plugin.ResolveSchemaResponse{Error: results[1].Interface().(error).Error()}
 			}
-			var cols []pluginschema.ColSchema
+
+			var cols []schema.ColumnSchema
 			if !results[0].IsNil() {
-				cols = results[0].Interface().([]pluginschema.ColSchema)
+				cols = results[0].Interface().([]schema.ColumnSchema)
 			}
+
 			outputSchema = convertColSchemaToFrameSchema(cols)
 		}
 	}
@@ -205,15 +210,18 @@ func (r *simpleRegistry) InitResource(id string, resourceType string, config map
 	}
 
 	structPtrVal := reflect.New(reg.ResourceType)
+
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
+
 	if len(config) > 0 {
 		if err := json.Unmarshal(configBytes, structPtrVal.Interface()); err != nil {
 			return fmt.Errorf("failed to unmarshal config into resource: %w", err)
 		}
 	}
+
 	kind := structPtrVal.Elem().Kind()
 	_ = kind
 
@@ -239,12 +247,14 @@ func (r *simpleRegistry) InitResource(id string, resourceType string, config map
 func (r *simpleRegistry) GetResource(id string) (any, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	wrapper, exists := r.resourceBinding[id]
 	if !exists {
 		return nil, fmt.Errorf("resource binding %s not initialized", id)
 	}
 
 	wrapper.updateLastUsed()
+
 	return wrapper.instance, nil
 }
 
@@ -256,6 +266,7 @@ func (r *simpleRegistry) CloseAllResources() {
 
 	for id, wrapper := range r.resourceBinding {
 		_ = wrapper.instance.Close()
+
 		delete(r.resourceBinding, id)
 	}
 }
@@ -264,6 +275,7 @@ func (r *simpleRegistry) StartResourceMonitor(timeout time.Duration) {
 	go func() {
 		ticker := time.NewTicker(timeout / 2)
 		defer ticker.Stop()
+
 		for {
 			select {
 			case <-r.ctx.Done():
@@ -277,10 +289,13 @@ func (r *simpleRegistry) StartResourceMonitor(timeout time.Duration) {
 
 func (r *simpleRegistry) evictTimedOutResources(timeout time.Duration) {
 	r.mu.Lock()
+
 	var toClose []pluginschema.Resource
+
 	for id, wrapper := range r.resourceBinding {
 		if wrapper.isTimedOut(timeout) {
 			toClose = append(toClose, wrapper.instance)
+
 			delete(r.resourceBinding, id)
 		}
 	}
@@ -294,7 +309,9 @@ func (r *simpleRegistry) evictTimedOutResources(timeout time.Duration) {
 func (r *simpleRegistry) GetStep(name string) (StepRegistration, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	step, ok := r.steps[name]
+
 	return step, ok
 }
 
@@ -306,13 +323,16 @@ func (r *simpleRegistry) AllSteps() map[string]StepRegistration {
 	for k, v := range r.steps {
 		stepsCopy[k] = v
 	}
+
 	return stepsCopy
 }
 
 func (r *simpleRegistry) GetResourceRegistration(name string) (ResourceRegistration, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	res, ok := r.resources[name]
+
 	return res, ok
 }
 
@@ -322,22 +342,12 @@ func (r *simpleRegistry) AllResources() map[string]ResourceRegistration {
 
 	resourcesCopy := make(map[string]ResourceRegistration, len(r.resources))
 	maps.Copy(resourcesCopy, r.resources)
+
 	return resourcesCopy
 }
 
-func convertColSchemaToFrameSchema(cols []pluginschema.ColSchema) schema.FrameSchema {
-	fields := make([]schema.FrameSchemaField, 0, len(cols))
-	for _, col := range cols {
-		arrowType := col.Type
-		if arrowType == "string" {
-			arrowType = "utf8"
-		}
-		fields = append(fields, schema.FrameSchemaField{
-			Name:      col.Name,
-			ArrowType: arrowType,
-		})
-	}
+func convertColSchemaToFrameSchema(cols []schema.ColumnSchema) schema.FrameSchema {
 	return schema.FrameSchema{
-		Fields: fields,
+		Columns: cols,
 	}
 }

@@ -25,9 +25,11 @@ func (c *compositeRegistry) ResolveSchema(request plugin.ResolveSchemaRequest) p
 	if len(parts) == 2 {
 		ns := parts[0]
 		stepName := parts[1]
+
 		if reg, ok := c.registries[ns]; ok {
 			reqCopy := request
 			reqCopy.StepName = stepName
+
 			return reg.ResolveSchema(reqCopy)
 		}
 	}
@@ -37,6 +39,7 @@ func (c *compositeRegistry) ResolveSchema(request plugin.ResolveSchemaRequest) p
 			return reg.ResolveSchema(request)
 		}
 	}
+
 	return plugin.ResolveSchemaResponse{Error: fmt.Sprintf("step %s not found", request.StepName)}
 }
 
@@ -44,6 +47,7 @@ func (c *compositeRegistry) GetStep(name string) (StepRegistration, bool) {
 	parts := strings.SplitN(name, ".", 2)
 	if len(parts) == 2 {
 		ns := parts[0]
+
 		stepName := parts[1]
 		if reg, ok := c.registries[ns]; ok {
 			return reg.GetStep(stepName)
@@ -55,16 +59,19 @@ func (c *compositeRegistry) GetStep(name string) (StepRegistration, bool) {
 			return step, true
 		}
 	}
+
 	return StepRegistration{}, false
 }
 
 func (c *compositeRegistry) AllSteps() map[string]StepRegistration {
 	all := make(map[string]StepRegistration)
+
 	for ns, reg := range c.registries {
 		for k, v := range reg.AllSteps() {
 			all[ns+"."+k] = v
 		}
 	}
+
 	return all
 }
 
@@ -72,6 +79,7 @@ func (c *compositeRegistry) GetResourceRegistration(name string) (ResourceRegist
 	parts := strings.SplitN(name, ".", 2)
 	if len(parts) == 2 {
 		ns := parts[0]
+
 		resName := parts[1]
 		if reg, ok := c.registries[ns]; ok {
 			return reg.GetResourceRegistration(resName)
@@ -83,16 +91,19 @@ func (c *compositeRegistry) GetResourceRegistration(name string) (ResourceRegist
 			return res, true
 		}
 	}
+
 	return ResourceRegistration{}, false
 }
 
 func (c *compositeRegistry) AllResources() map[string]ResourceRegistration {
 	all := make(map[string]ResourceRegistration)
+
 	for ns, reg := range c.registries {
 		for k, v := range reg.AllResources() {
 			all[ns+"."+k] = v
 		}
 	}
+
 	return all
 }
 
@@ -100,6 +111,7 @@ func (c *compositeRegistry) InitResource(id string, resourceType string, config 
 	parts := strings.SplitN(resourceType, ".", 2)
 	if len(parts) == 2 {
 		ns := parts[0]
+
 		resType := parts[1]
 		if reg, ok := c.registries[ns]; ok {
 			return reg.InitResource(id, resType, config)
@@ -111,6 +123,7 @@ func (c *compositeRegistry) InitResource(id string, resourceType string, config 
 			return reg.InitResource(id, resourceType, config)
 		}
 	}
+
 	return fmt.Errorf("resource type %q not found in registries", resourceType)
 }
 
@@ -120,6 +133,7 @@ func (c *compositeRegistry) GetResource(id string) (any, error) {
 			return inst, nil
 		}
 	}
+
 	return nil, fmt.Errorf("resource binding %s not found in registries", id)
 }
 

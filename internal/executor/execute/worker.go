@@ -50,6 +50,7 @@ func (e *workerExecutor) Execute(ctx context.Context, request plugin.ExecuteStep
 			Timestamp:     time.Now(),
 		}
 		e.workerHistory.Add(entry)
+
 		return resp
 	}
 
@@ -57,6 +58,7 @@ func (e *workerExecutor) Execute(ctx context.Context, request plugin.ExecuteStep
 	// If a resource reference is provided, each defined resource is instantiated
 	// using the registry configuration and stored for step execution.
 	resources := make(map[string]any)
+
 	if request.ResourceRef != "" && len(request.Resources) > 0 {
 		for resourceReference, resourceDefinition := range request.Resources {
 			// Initialize the resourceInstance instance using its type and configuration.
@@ -84,6 +86,7 @@ func (e *workerExecutor) Execute(ctx context.Context, request plugin.ExecuteStep
 	// We read each input column array from the designated SHM path. Any loaded
 	// arrays must be released at the end of the execution scope to prevent leaks.
 	columns := make(map[string]arrow.Array)
+
 	for fieldName, pathRef := range request.InputRef {
 		arr, err := locality.ReadArrowArrayFromPath(pathRef)
 		if err != nil {
@@ -107,6 +110,7 @@ func (e *workerExecutor) Execute(ctx context.Context, request plugin.ExecuteStep
 	result, err := unifiedExecute(ctx, e.registry, execRequest)
 	if err != nil {
 		logger.L().Error("Step execution failed", zap.String("step", request.StepName), zap.Error(err))
+
 		return trackAndReturn(plugin.ExecuteStepResponse{
 			TaskID:       request.TaskID,
 			Status:       plugin.StepResponseError,
@@ -118,10 +122,12 @@ func (e *workerExecutor) Execute(ctx context.Context, request plugin.ExecuteStep
 	// We iterate through the result columns, retain and write each non-nil Arrow
 	// array to SHM, and record the returned SHM paths as output handles.
 	outputHandles := make(map[string]string)
+
 	for name, arr := range result.Columns {
 		if arr != nil && !reflect.ValueOf(arr).IsNil() {
 			arr.Retain()
 			defer arr.Release()
+
 			path, err := locality.WriteArrowArrayOnlyToShm(arr)
 			if err != nil {
 				return trackAndReturn(plugin.ExecuteStepResponse{
@@ -130,6 +136,7 @@ func (e *workerExecutor) Execute(ctx context.Context, request plugin.ExecuteStep
 					ErrorMessage: fmt.Sprintf("failed to write output frame: %v", err),
 				}), nil
 			}
+
 			outputHandles[name] = path
 		}
 	}

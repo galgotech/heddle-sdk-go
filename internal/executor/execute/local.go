@@ -34,6 +34,7 @@ func (e *LocalExecutor) Execute(ctx context.Context, input plugin.ExecuteStepReq
 	step, ok := e.registry.GetStep(stepName)
 	if !ok {
 		logger.L().Fatal("step not found", zap.String("stepName", stepName))
+
 		return plugin.ExecuteStepResponse{
 			TaskID:       input.TaskID,
 			Status:       plugin.StepResponseError,
@@ -43,10 +44,12 @@ func (e *LocalExecutor) Execute(ctx context.Context, input plugin.ExecuteStepReq
 
 	// 1. Resolve resources from local bindings
 	resources := make(map[string]any)
+
 	t := step.StructType
 	for fieldType := range t.Fields() {
 		if schema.IsResource(fieldType.Type) {
 			fieldName := fieldType.Name
+
 			inst, err := e.registry.GetResource(fieldName)
 			if err != nil {
 				return plugin.ExecuteStepResponse{
@@ -55,6 +58,7 @@ func (e *LocalExecutor) Execute(ctx context.Context, input plugin.ExecuteStepReq
 					ErrorMessage: fmt.Sprintf("failed to get resource %s: %v", fieldName, err),
 				}, nil
 			}
+
 			resources[fieldName] = inst
 		}
 	}
@@ -76,6 +80,7 @@ func (e *LocalExecutor) Execute(ctx context.Context, input plugin.ExecuteStepReq
 	result, err := unifiedExecute(ctx, e.registry, execReq)
 	if err != nil {
 		logger.L().Fatal("step execution failed", zap.String("stepName", stepName), zap.Error(err))
+
 		return plugin.ExecuteStepResponse{
 			TaskID:       input.TaskID,
 			Status:       plugin.StepResponseError,

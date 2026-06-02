@@ -2,75 +2,14 @@ package schema
 
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
+
+	"github.com/galgotech/heddle-lang/pkg/schema"
 )
-
-type ColSchema struct {
-	Name string
-	Type string
-}
-
-type refState struct {
-	slices    map[string][]any
-	kinds     []uint8
-	offsets   []uintptr
-	names     []string
-	length    int
-	rowOffset int
-}
-
-func newRefState(tType *rtype, columns [][]any) (*refState, error) {
-	if tType.kind&0x1f == KindPointer {
-		return nil, fmt.Errorf("type is a pointer")
-	}
-
-	st := tType.structType()
-	if st == nil {
-		return nil, fmt.Errorf("type is not a struct")
-	}
-
-	var fields []structField
-	for _, field := range st.fields {
-		if field.name.IsEmbedded() || !field.name.IsExported() {
-			continue
-		}
-		fields = append(fields, field)
-	}
-
-	if len(columns) != len(fields) {
-		return nil, fmt.Errorf("columns length %d does not match fields length %d", len(columns), len(fields))
-	}
-
-	slices := make(map[string][]any)
-	kinds := make([]uint8, len(fields))
-	offsets := make([]uintptr, len(fields))
-	names := make([]string, len(fields))
-	for i := 0; i < len(fields); i++ {
-		field := fields[i]
-		fieldName := field.name.Name()
-		slices[fieldName] = columns[i]
-		kinds[i] = field.typ.kind & 0x1f
-		offsets[i] = field.offset
-		names[i] = fieldName
-	}
-
-	length := 0
-	if len(names) > 0 {
-		length = len(slices[names[0]])
-	}
-
-	return &refState{
-		slices:    slices,
-		kinds:     kinds,
-		offsets:   offsets,
-		names:     names,
-		length:    length,
-		rowOffset: 0,
-	}, nil
-}
 
 const UnderLineTypePosition = 1
 
@@ -79,13 +18,16 @@ type Frame[T any] struct {
 	_     T
 }
 
-func NewFrame[T any](data []T) (Frame[T], error) {
+func NewFrame[T any](columnsSchema []schema.ColumnSchema, data []T) (Frame[T], error) {
 	frame := Frame[T]{}
+
 	var zero T
+
 	tType := getRtype(zero)
 	if tType == nil {
 		return frame, fmt.Errorf("type is nil")
 	}
+
 	if tType.kind&0x1f == KindPointer {
 		return frame, fmt.Errorf("type is a pointer")
 	}
@@ -100,6 +42,7 @@ func NewFrame[T any](data []T) (Frame[T], error) {
 		if field.name.IsEmbedded() || !field.name.IsExported() {
 			continue
 		}
+
 		fields = append(fields, field)
 	}
 
@@ -112,7 +55,9 @@ func NewFrame[T any](data []T) (Frame[T], error) {
 		ptr := unsafe.Pointer(&data[i])
 		for j, field := range fields {
 			valPtr := unsafe.Add(ptr, field.offset)
+
 			var val any
+
 			switch field.typ.kind & 0x1f {
 			case KindInt:
 				val = *(*int)(valPtr)
@@ -143,6 +88,7 @@ func NewFrame[T any](data []T) (Frame[T], error) {
 			case KindString:
 				val = *(*string)(valPtr)
 			}
+
 			columns[j][i] = val
 		}
 	}
@@ -153,10 +99,11 @@ func NewFrame[T any](data []T) (Frame[T], error) {
 	}
 
 	frame.state = state
+
 	return frame, nil
 }
 
-func NewFrameArray(frame any, dataArr map[string]arrow.Array) error {
+func NewFrameArray(frame any, columnsSchema []schema.ColumnSchema, dataArr map[string]arrow.Array) error {
 	t := getRtype(frame)
 	if t.kind&0x1f != KindPointer {
 		return fmt.Errorf("type is not a pointer")
@@ -168,13 +115,16 @@ func NewFrameArray(frame any, dataArr map[string]arrow.Array) error {
 	}
 
 	stFrame := frameType.structType()
+
 	var tType *rtype
+
 	for _, field := range stFrame.fields {
 		if field.name.Name() == "_" {
 			tType = field.typ
 			break
 		}
 	}
+
 	if tType == nil {
 		return fmt.Errorf("could not find underlying type T in Frame")
 	}
@@ -193,18 +143,32 @@ func NewFrameArray(frame any, dataArr map[string]arrow.Array) error {
 		if field.name.IsEmbedded() || !field.name.IsExported() {
 			continue
 		}
+
 		fields = append(fields, field)
 	}
 
-	if len(fields) != len(dataArr) {
-		return fmt.Errorf("columns length %d does not match fields length %d", len(dataArr), len(fields))
+	if len(fields) != len(columnsSchema) {
+		return fmt.Errorf("columns schema length %d does not match fields length %d", len(columnsSchema), len(fields))
 	}
 
 	columnsFrame := make([][]any, len(fields))
 	for i, field := range fields {
-		valueArray, ok := dataArr[field.name.Name()]
+		var colName string
+
+		for _, col := range columnsSchema {
+			if strings.EqualFold(col.Name, field.name.Name()) {
+				colName = col.Name
+				break
+			}
+		}
+
+		if colName == "" {
+			return fmt.Errorf("missing column schema for field %s", field.name.Name())
+		}
+
+		valueArray, ok := dataArr[colName]
 		if !ok {
-			return fmt.Errorf("missing arrow array for field %s", field.name.Name())
+			return fmt.Errorf("missing arrow array for column %s", colName)
 		}
 
 		length := valueArray.Len()
@@ -213,62 +177,62 @@ func NewFrameArray(frame any, dataArr map[string]arrow.Array) error {
 		switch valueArray.DataType().ID() {
 		case arrow.INT8:
 			arr := valueArray.(*array.Int8)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.INT16:
 			arr := valueArray.(*array.Int16)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.INT32:
 			arr := valueArray.(*array.Int32)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.INT64:
 			arr := valueArray.(*array.Int64)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.UINT8:
 			arr := valueArray.(*array.Uint8)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.UINT16:
 			arr := valueArray.(*array.Uint16)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.UINT32:
 			arr := valueArray.(*array.Uint32)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.UINT64:
 			arr := valueArray.(*array.Uint64)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.FLOAT32:
 			arr := valueArray.(*array.Float32)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.FLOAT64:
 			arr := valueArray.(*array.Float64)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.BOOL:
 			arr := valueArray.(*array.Boolean)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		case arrow.STRING:
 			arr := valueArray.(*array.String)
-			for idx := 0; idx < length; idx++ {
+			for idx := range length {
 				columnsFrame[i][idx] = arr.Value(idx)
 			}
 		default:
@@ -283,6 +247,7 @@ func NewFrameArray(frame any, dataArr map[string]arrow.Array) error {
 
 	ptrToFrame := (*eface)(unsafe.Pointer(&frame)).data
 	*(**refState)(ptrToFrame) = state
+
 	return nil
 }
 
@@ -290,7 +255,9 @@ func (r Frame[T]) Add(value T) {
 	ptr := unsafe.Pointer(&value)
 	for i, offset := range r.state.offsets {
 		valPtr := unsafe.Add(ptr, offset)
+
 		var val any
+
 		switch r.state.kinds[i] {
 		case KindInt:
 			val = *(*int)(valPtr)
@@ -321,9 +288,11 @@ func (r Frame[T]) Add(value T) {
 		case KindString:
 			val = *(*string)(valPtr)
 		}
+
 		fieldName := r.state.names[i]
 		r.state.slices[fieldName] = append(r.state.slices[fieldName], val)
 	}
+
 	r.state.length++
 }
 
@@ -336,10 +305,12 @@ func (r Frame[T]) Each(yield func(item T)) error {
 	for i := range r.state.length {
 		itemPtr := new(T)
 		ptr := unsafe.Pointer(itemPtr)
+
 		for j, offset := range offsets {
 			kind := kinds[j]
 			fieldName := names[j]
 			val := slices[fieldName][i]
+
 			switch kind {
 			case KindInt:
 				*(*int)(unsafe.Add(ptr, offset)) = val.(int)

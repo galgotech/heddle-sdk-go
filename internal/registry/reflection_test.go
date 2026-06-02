@@ -148,6 +148,7 @@ func TestReflectFunctionStep(t *testing.T) {
 	getMethod := func(name string) reflect.Method {
 		m, found := structType.MethodByName(name)
 		require.True(t, found, "method %s not found", name)
+
 		return m
 	}
 
@@ -204,6 +205,7 @@ func TestReflectFunctionStep(t *testing.T) {
 
 	// 9. Error case: BadInputSchema (input has unsupported type)
 	mBadInputSchema := getMethod("BadInputSchema")
+
 	_, err = reflectFunctionStep(structType, mBadInputSchema)
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "input: unsupported type")
@@ -211,6 +213,7 @@ func TestReflectFunctionStep(t *testing.T) {
 
 	// 10. Error case: BadOutputSchema (output has unsupported type)
 	mBadOutputSchema := getMethod("BadOutputSchema")
+
 	_, err = reflectFunctionStep(structType, mBadOutputSchema)
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "output: unsupported type")

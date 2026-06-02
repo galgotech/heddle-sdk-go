@@ -47,6 +47,7 @@ func IsRef(t reflect.Type) bool {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
+
 	return (t.Name() == "Frame" || strings.HasPrefix(t.Name(), "Frame[")) && t.PkgPath() == packageName
 }
 
@@ -55,21 +56,24 @@ func ExtractSchema(t reflect.Type) (schema.FrameSchema, error) {
 	if t == nil {
 		return schema.FrameSchema{}, fmt.Errorf("ExtractSchema: nil type or generic interface not allowed")
 	}
+
 	if t.Kind() == reflect.Pointer {
 		return schema.FrameSchema{}, fmt.Errorf("ExtractSchema: pointer not allowed")
 	}
+
 	if t.Kind() != reflect.Struct {
 		return schema.FrameSchema{}, fmt.Errorf("ExtractSchema: expected pointer to struct or struct, got %s", t.Kind())
 	}
 
 	frameSchema := schema.FrameSchema{
-		Fields: []schema.FrameSchemaField{},
+		Columns: []schema.ColumnSchema{},
 	}
 
 	for f := range t.Fields() {
 		if f.Anonymous || !f.IsExported() {
 			continue
 		}
+
 		fieldType := f.Type
 
 		var arrowType string
@@ -79,6 +83,7 @@ func ExtractSchema(t reflect.Type) (schema.FrameSchema, error) {
 			if fieldType.Kind() == reflect.Pointer {
 				fieldType = fieldType.Elem()
 			}
+
 			switch fieldType.Kind() {
 			case reflect.Int8:
 				arrowType = "int8"
@@ -110,7 +115,7 @@ func ExtractSchema(t reflect.Type) (schema.FrameSchema, error) {
 		}
 
 		if arrowType != "" {
-			frameSchema.Fields = append(frameSchema.Fields, schema.FrameSchemaField{
+			frameSchema.Columns = append(frameSchema.Columns, schema.ColumnSchema{
 				Name:      f.Name,
 				ArrowType: arrowType,
 			})

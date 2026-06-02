@@ -43,11 +43,13 @@ func Run(ctx context.Context, plugins ...*plugin.Plugin) error {
 	}
 
 	var firstErr error
+
 	for range plugins {
 		select {
 		case err := <-errChan:
 			if err != nil && firstErr == nil {
 				firstErr = err
+
 				cancel()
 			}
 		case <-ctx.Done():

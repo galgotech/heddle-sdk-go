@@ -81,9 +81,11 @@ type Name struct {
 
 func (n Name) ReadVarint(off int) (int, int) {
 	v := 0
+
 	for i := 0; ; i++ {
 		x := *(*byte)(unsafe.Add(unsafe.Pointer(n.Bytes), off+i))
 		v += int(x&0x7f) << (7 * i)
+
 		if x&0x80 == 0 {
 			return i + 1, v
 		}
@@ -94,8 +96,10 @@ func (n Name) Name() string {
 	if n.Bytes == nil {
 		return ""
 	}
+
 	i, l := n.ReadVarint(1)
 	ptr := unsafe.Add(unsafe.Pointer(n.Bytes), 1+i)
+
 	return unsafe.String((*byte)(ptr), l)
 }
 
@@ -103,6 +107,7 @@ func (n Name) IsExported() bool {
 	if n.Bytes == nil {
 		return false
 	}
+
 	return (*n.Bytes)&(1<<0) != 0
 }
 
@@ -110,11 +115,12 @@ func (n Name) IsEmbedded() bool {
 	if n.Bytes == nil {
 		return false
 	}
+
 	return (*n.Bytes)&(1<<3) != 0
 }
 
 func getRtype(zero any) *rtype {
-	var i any = zero
+	var i = zero
 	return (*eface)(unsafe.Pointer(&i)).rtype
 }
 
@@ -122,5 +128,6 @@ func (r *rtype) structType() *structType {
 	if r.kind&0x1f != KindStruct {
 		return nil
 	}
+
 	return (*structType)(unsafe.Pointer(r))
 }

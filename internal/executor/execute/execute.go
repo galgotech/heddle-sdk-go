@@ -14,7 +14,7 @@ import (
 	internalarrow "github.com/galgotech/heddle-sdk-go/internal/arrow"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
 	internalschema "github.com/galgotech/heddle-sdk-go/internal/schema"
-	"github.com/galgotech/heddle-sdk-go/schema"
+	sdkSchema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
 // Executor defines a generic interface for executing a step
@@ -87,15 +87,18 @@ func unifiedExecute(ctx context.Context, registry registry.Registry, request Exe
 
 	// 7. Execution with Context Timeout & Panic Recovery
 	execCtx := ctx
+
 	var cancel context.CancelFunc
 	if _, ok := execCtx.Deadline(); !ok {
 		execCtx, cancel = context.WithTimeout(ctx, 15*time.Minute)
 		defer cancel()
 	}
 
-	var results []reflect.Value
-	var stepPanicked bool
-	var panicVal any
+	var (
+		results      []reflect.Value
+		stepPanicked bool
+		panicVal     any
+	)
 
 	func() {
 		defer func() {
@@ -152,8 +155,9 @@ func hydrateConfig(step registry.StepRegistration, config string) (reflect.Value
 
 func prepareInput(step registry.StepRegistration, columns map[string]arrow.Array) (reflect.Value, error) {
 	refVal := reflect.New(step.InputType).Elem()
+	inputSchema := step.InputSchema
 
-	err := schema.NewFrameArray(refVal.Addr().Interface(), columns)
+	err := sdkSchema.NewFrameArray(refVal.Addr().Interface(), inputSchema.Columns, columns)
 	if err != nil {
 		return reflect.Value{}, err
 	}
@@ -166,22 +170,27 @@ func extractOutput(outputVal reflect.Value) (map[string]arrow.Array, error) {
 	if !method.IsValid() {
 		return nil, fmt.Errorf("Slices method not found on output type %s", outputVal.Type())
 	}
+
 	res := method.Call(nil)
 	if len(res) == 0 {
 		return nil, fmt.Errorf("Slices did not return a value")
 	}
+
 	slicesMap, ok := res[0].Interface().(map[string][]any)
 	if !ok {
 		return nil, fmt.Errorf("Slices did not return map[string][]any")
 	}
 
 	columns := make(map[string]arrow.Array)
+
 	for colName, slice := range slicesMap {
 		arr, err := internalarrow.SliceToArrowArray(slice)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert column %s to arrow array: %w", colName, err)
 		}
+
 		columns[colName] = arr
 	}
+
 	return columns, nil
 }

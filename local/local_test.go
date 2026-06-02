@@ -32,6 +32,7 @@ func (s *PluginASteps) StepA(ctx context.Context, cfg ConfigA, in schema.Frame[I
 			OutVal: item.InVal + "_pA",
 		})
 	})
+
 	return nil
 }
 
@@ -43,6 +44,7 @@ func (s *PluginBSteps) StepB(ctx context.Context, cfg ConfigA, in schema.Frame[O
 			OutVal: item.OutVal + "_pB",
 		})
 	})
+
 	return nil
 }
 
@@ -59,13 +61,15 @@ func TestLocalRunnerMultiplePlugins(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Run StepA on PluginA using fully-qualified namespaced step name
-	inA, _ := schema.NewFrame([]InputA{{InVal: "test"}})
+	inA, _ := schema.NewFrame(nil, []InputA{{InVal: "test"}})
 	resA := runner.Execute(ctx, "pluginA.step_a", ConfigA{Param: "xyz"}, inA)
 	require.NotNil(t, resA)
 
 	outA, ok := resA.(schema.Frame[OutputA])
 	require.True(t, ok)
+
 	var valA string
+
 	outA.Each(func(item OutputA) {
 		valA = item.OutVal
 	})
@@ -77,7 +81,9 @@ func TestLocalRunnerMultiplePlugins(t *testing.T) {
 
 	outB, ok := resB.(schema.Frame[OutputA])
 	require.True(t, ok)
+
 	var valB string
+
 	outB.Each(func(item OutputA) {
 		valB = item.OutVal
 	})

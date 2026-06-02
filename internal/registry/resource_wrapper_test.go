@@ -34,7 +34,9 @@ func TestResourceWrapper(t *testing.T) {
 
 	// Update last used
 	before := time.Now().UnixNano()
+
 	wrapper.updateLastUsed()
+
 	after := time.Now().UnixNano()
 
 	last := wrapper.lastUsed.Load()

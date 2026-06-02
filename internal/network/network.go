@@ -57,14 +57,20 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 	// Ensure all active resources are closed when this method returns.
 	defer nc.registry.CloseAllResources()
 
-	var opts []grpc.DialOption
-	var err error
+	var (
+		opts []grpc.DialOption
+		err  error
+	)
+
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
-	var conn *grpc.ClientConn
-	var client flight.Client
+	var (
+		conn   *grpc.ClientConn
+		client flight.Client
+	)
 
 	// 1. Start Retry Loop
+
 	for {
 		// 1.1 Connect to Worker (handle UDS if path starts with / or unix:)
 		target := runtime.WorkerUDSPath
@@ -89,7 +95,9 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 		allResources := nc.registry.AllResources()
 
 		logger.L().Info("Preparing plugin registration", zap.Int("steps", len(allSteps)), zap.Int("resources", len(allResources)))
+
 		schemas := make(map[string]schema.StepSchemas)
+
 		for name, step := range allSteps {
 			capName := fmt.Sprintf("%s.%s", nc.namespace, name)
 			schemas[capName] = schema.StepSchemas{
@@ -115,6 +123,7 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 			Schemas:   schemas,
 			Resources: resources,
 		}
+
 		registrationBody, err := json.Marshal(registration)
 		if err != nil {
 			logger.L().Info("Failed to marshal plugin registration...", zap.String("target", target))
@@ -159,7 +168,6 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 		// 1.3 Start Heartbeat and Execution Loop
 		// We use a separate context for each connection session
 		sessionCtx, cancel := context.WithCancel(ctx)
-
 		go nc.startHeartbeat(sessionCtx, client)
 
 		if nc.ready != nil {
@@ -172,11 +180,14 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 		}
 
 		err = nc.startExecutionLoop(sessionCtx, client)
+
 		cancel() // Stop heartbeat
+
 		conn.Close()
 
 		if err != nil {
 			logger.L().Info("Worker connection lost, reconnecting...", zap.String("target", target))
+
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -203,6 +214,7 @@ func (nc *flightNetworkClient) startHeartbeat(ctx context.Context, client flight
 				Status:    "ready",
 			}
 			body, _ := json.Marshal(hb)
+
 			_, err := client.DoAction(ctx, &flight.Action{
 				Type: plugin.ActionPluginHeartbeat,
 				Body: body,
@@ -248,11 +260,13 @@ func (nc *flightNetworkClient) startExecutionLoop(ctx context.Context, client fl
 				logger.L().Error("Execution failed", zap.Error(err))
 				return
 			}
+
 			responseBody, err := json.Marshal(response)
 			if err != nil {
 				logger.L().Error("Failed to marshal response", zap.Error(err))
 				return
 			}
+
 			if err := stream.Send(&flight.FlightData{DataBody: responseBody}); err != nil {
 				logger.L().Error("Failed to send response", zap.Error(err))
 			}

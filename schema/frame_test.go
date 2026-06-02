@@ -8,6 +8,8 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	langschema "github.com/galgotech/heddle-lang/pkg/schema"
 )
 
 type FullBasicTypesStruct struct {
@@ -44,7 +46,7 @@ type StructWithAnonymous struct {
 
 func TestNewFrame_PointerError(t *testing.T) {
 	// Pointers are not allowed as the struct type for a Frame
-	frame, err := NewFrame[*FullBasicTypesStruct](nil)
+	frame, err := NewFrame[*FullBasicTypesStruct](nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "is a pointer")
 	assert.Empty(t, frame)
@@ -86,7 +88,7 @@ func TestNewFrame_BasicTypes(t *testing.T) {
 		},
 	}
 
-	frame, err := NewFrame(data)
+	frame, err := NewFrame(nil, data)
 	require.NoError(t, err)
 	assert.NotNil(t, frame.state)
 	assert.Equal(t, 2, frame.state.length)
@@ -110,6 +112,7 @@ func TestNewFrame_BasicTypes(t *testing.T) {
 
 	// Iterate using Each and verify mapping
 	var iterated []FullBasicTypesStruct
+
 	err = frame.Each(func(item FullBasicTypesStruct) {
 		iterated = append(iterated, item)
 	})
@@ -117,11 +120,10 @@ func TestNewFrame_BasicTypes(t *testing.T) {
 	require.Len(t, iterated, 2)
 	assert.Equal(t, data[0], iterated[0])
 	assert.Equal(t, data[1], iterated[1])
-
 }
 
 func TestFrame_Add(t *testing.T) {
-	frame, err := NewFrame([]FullBasicTypesStruct{})
+	frame, err := NewFrame(nil, []FullBasicTypesStruct{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, frame.state.length)
 
@@ -148,6 +150,7 @@ func TestFrame_Add(t *testing.T) {
 	assert.Equal(t, []any{"added"}, frame.state.slices["FString"])
 
 	var iterated []FullBasicTypesStruct
+
 	err = frame.Each(func(item FullBasicTypesStruct) {
 		iterated = append(iterated, item)
 	})
@@ -162,7 +165,7 @@ func TestFrame_UnexportedFields(t *testing.T) {
 		{Exported1: 30, unexported: "secret2", Exported2: 40.5},
 	}
 
-	frame, err := NewFrame(data)
+	frame, err := NewFrame(nil, data)
 	require.NoError(t, err)
 	assert.Equal(t, 2, frame.state.length)
 	// We expect 2 columns, since the unexported field is ignored
@@ -174,6 +177,7 @@ func TestFrame_UnexportedFields(t *testing.T) {
 
 	// Try adding an item
 	newItem := StructWithUnexported{Exported1: 50, unexported: "secret3", Exported2: 60.5}
+
 	assert.NotPanics(t, func() {
 		frame.Add(newItem)
 	})
@@ -181,6 +185,7 @@ func TestFrame_UnexportedFields(t *testing.T) {
 
 	// Iterate and make sure unexported fields are not populated (stay as zero value "")
 	var iterated []StructWithUnexported
+
 	err = frame.Each(func(item StructWithUnexported) {
 		iterated = append(iterated, item)
 	})
@@ -204,7 +209,7 @@ func TestFrame_AnonymousFields(t *testing.T) {
 		},
 	}
 
-	frame, err := NewFrame(data)
+	frame, err := NewFrame(nil, data)
 	require.NoError(t, err)
 	// We expect 1 column, since the embedded/anonymous field is ignored
 	assert.Equal(t, 1, len(frame.state.slices))
@@ -217,13 +222,14 @@ func TestFrame_AnonymousFields(t *testing.T) {
 	frame.Add(newItem)
 
 	var iterated []StructWithAnonymous
+
 	err = frame.Each(func(item StructWithAnonymous) {
 		iterated = append(iterated, item)
 	})
 	require.NoError(t, err)
 	require.Len(t, iterated, 2)
 	assert.Equal(t, "foo", iterated[0].ExportedField)
-	assert.Equal(t, 0, iterated[0].Embedded.Val) // should be zero value since it was ignored
+	assert.Equal(t, 0, iterated[0].Val) // should be zero value since it was ignored
 }
 
 type FrameArrayTestStruct struct {
@@ -237,19 +243,25 @@ func TestNewFrameArray(t *testing.T) {
 
 	bAge := array.NewInt32Builder(mem)
 	defer bAge.Release()
+
 	bAge.AppendValues([]int32{30, 25}, nil)
+
 	arrAge := bAge.NewInt32Array()
 	defer arrAge.Release()
 
 	bName := array.NewStringBuilder(mem)
 	defer bName.Release()
+
 	bName.AppendValues([]string{"Alice", "Bob"}, nil)
+
 	arrName := bName.NewStringArray()
 	defer arrName.Release()
 
 	bActive := array.NewBooleanBuilder(mem)
 	defer bActive.Release()
+
 	bActive.AppendValues([]bool{true, false}, nil)
+
 	arrActive := bActive.NewBooleanArray()
 	defer arrActive.Release()
 
@@ -260,7 +272,13 @@ func TestNewFrameArray(t *testing.T) {
 	}
 
 	var frame Frame[FrameArrayTestStruct]
-	err := NewFrameArray(&frame, dataArr)
+
+	columnsSchema := []langschema.ColumnSchema{
+		{Name: "Age", ArrowType: "int32"},
+		{Name: "Name", ArrowType: "utf8"},
+		{Name: "Active", ArrowType: "bool"},
+	}
+	err := NewFrameArray(&frame, columnsSchema, dataArr)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, frame.state.length)
@@ -271,6 +289,7 @@ func TestNewFrameArray(t *testing.T) {
 	assert.Equal(t, []any{true, false}, frame.state.slices["Active"])
 
 	var iterated []FrameArrayTestStruct
+
 	err = frame.Each(func(item FrameArrayTestStruct) {
 		iterated = append(iterated, item)
 	})
@@ -283,6 +302,7 @@ func TestNewFrameArray(t *testing.T) {
 func BenchmarkFrame_Each(b *testing.B) {
 	// Create dummy data
 	const size = 1000
+
 	data := make([]FullBasicTypesStruct, size)
 	for i := 0; i < size; i++ {
 		data[i] = FullBasicTypesStruct{
@@ -303,7 +323,7 @@ func BenchmarkFrame_Each(b *testing.B) {
 		}
 	}
 
-	frame, err := NewFrame(data)
+	frame, err := NewFrame(nil, data)
 	if err != nil {
 		b.Fatalf("failed to create frame: %v", err)
 	}
@@ -322,4 +342,3 @@ func BenchmarkFrame_Each(b *testing.B) {
 		}
 	}
 }
-

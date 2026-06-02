@@ -91,13 +91,17 @@ func TestPrepareInput(t *testing.T) {
 
 		bID := array.NewInt32Builder(mem)
 		defer bID.Release()
+
 		bID.AppendValues([]int32{1, 2}, nil)
+
 		arrID := bID.NewInt32Array()
 		defer arrID.Release()
 
 		bName := array.NewStringBuilder(mem)
 		defer bName.Release()
+
 		bName.AppendValues([]string{"Alice", "Bob"}, nil)
+
 		arrName := bName.NewStringArray()
 		defer arrName.Release()
 
@@ -119,6 +123,7 @@ func TestPrepareInput(t *testing.T) {
 		require.True(t, ok)
 
 		var iterated []DummyInput
+
 		err = frame.Each(func(item DummyInput) {
 			iterated = append(iterated, item)
 		})
@@ -133,7 +138,9 @@ func TestPrepareInput(t *testing.T) {
 
 		bID := array.NewInt32Builder(mem)
 		defer bID.Release()
+
 		bID.AppendValues([]int32{1, 2}, nil)
+
 		arrID := bID.NewInt32Array()
 		defer arrID.Release()
 

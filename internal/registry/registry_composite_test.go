@@ -12,11 +12,11 @@ import (
 )
 
 type mockRegistry struct {
-	steps               map[string]StepRegistration
-	resources           map[string]ResourceRegistration
-	resourceBindings    map[string]any
-	initResourceCalled  bool
-	initResourceArgs    struct {
+	steps              map[string]StepRegistration
+	resources          map[string]ResourceRegistration
+	resourceBindings   map[string]any
+	initResourceCalled bool
+	initResourceArgs   struct {
 		ID           string
 		ResourceType string
 		Config       map[string]any
@@ -35,6 +35,7 @@ func (m *mockRegistry) Register(instance any) error {
 func (m *mockRegistry) ResolveSchema(request plugin.ResolveSchemaRequest) plugin.ResolveSchemaResponse {
 	m.resolveSchemaCalled = true
 	m.resolveSchemaReq = request
+
 	return m.resolveSchemaResp
 }
 
@@ -61,9 +62,11 @@ func (m *mockRegistry) InitResource(id string, resourceType string, config map[s
 	m.initResourceArgs.ID = id
 	m.initResourceArgs.ResourceType = resourceType
 	m.initResourceArgs.Config = config
+
 	if resourceType == "trigger-error" {
 		return fmt.Errorf("mock init resource error")
 	}
+
 	return nil
 }
 
@@ -72,6 +75,7 @@ func (m *mockRegistry) GetResource(id string) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("resource not found")
 	}
+
 	return res, nil
 }
 

@@ -61,6 +61,7 @@ func (s *Steps) TestProducer(ctx context.Context, config QueryConfig, in schema.
 		Country: "Brasil",
 	}
 	out.Add(queryOutput)
+
 	return nil
 }
 
@@ -90,6 +91,7 @@ func Start() {
 	p := plugin.New("pg")
 
 	steps := &Steps{}
+
 	err := p.Register(steps)
 	if err != nil {
 		logger.L().Error("Failed to register steps", zap.Error(err))
@@ -103,6 +105,7 @@ func Run() {
 	p := plugin.New("pg")
 
 	steps := &Steps{}
+
 	err := p.Register(steps)
 	if err != nil {
 		logger.L().Error("Failed to register steps", zap.Error(err))
@@ -110,6 +113,7 @@ func Run() {
 
 	// resource test = pg.connection { host: "pg.internal" }
 	configResource := map[string]any{"host": "pg.internal"}
+
 	err = p.ResourceInstance("DB", "pg.connection", configResource)
 	if err != nil {
 		logger.L().Error("Failed to create resource instance", zap.Error(err))
@@ -127,19 +131,22 @@ func Run() {
 		UserID: 123,
 	}
 
-	ref, _ := schema.NewFrame([]QueryInput{input})
+	ref, _ := schema.NewFrame(nil, []QueryInput{input})
 
 	ctx := context.Background()
 	exec := local.NewLocalRunner(p)
 	output := exec.Execute(ctx, "query", c, ref)
+
 	fmt.Printf("\n--- Step Direct Execution Result ---\n")
 
 	if out, ok := output.(schema.Frame[QueryOutput]); ok {
 		rowIdx := 0
+
 		out.Each(func(item QueryOutput) {
 			fmt.Printf("Row %d: UserID=%d, Country=%s\n", rowIdx, item.UserID, item.Country)
 			rowIdx++
 		})
 	}
+
 	fmt.Printf("-------------------------------------\n\n")
 }

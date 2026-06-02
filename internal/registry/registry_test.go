@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/galgotech/heddle-lang/pkg/plugin"
+	langschema "github.com/galgotech/heddle-lang/pkg/schema"
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
@@ -26,6 +27,7 @@ func (r *MyTestResource) Init(ctx context.Context) error {
 	if r.ConfigVal == "trigger-error" {
 		return errors.New("mock init error")
 	}
+
 	return nil
 }
 
@@ -66,22 +68,24 @@ func (d DuplicateStepComponent) SimpleStep(ctx context.Context, config TestStepC
 
 type ComponentWithResolve struct{}
 
-func (c ComponentWithResolve) ResolveTypeInput(ctx context.Context, config TestStepConfig, stepName string) ([]pluginschema.ColSchema, error) {
+func (c ComponentWithResolve) ResolveTypeInput(ctx context.Context, config TestStepConfig, stepName string) ([]langschema.ColumnSchema, error) {
 	if config.Foo == "trigger-error" {
 		return nil, errors.New("mock dynamic input error")
 	}
-	return []pluginschema.ColSchema{
-		{Name: "dynamic_in_col", Type: "string"},
-		{Name: "dynamic_in_int", Type: "int32"},
+
+	return []langschema.ColumnSchema{
+		{Name: "dynamic_in_col", ArrowType: "utf8"},
+		{Name: "dynamic_in_int", ArrowType: "int32"},
 	}, nil
 }
 
-func (c ComponentWithResolve) ResolveTypeOutput(ctx context.Context, config TestStepConfig, stepName string) ([]pluginschema.ColSchema, error) {
+func (c ComponentWithResolve) ResolveTypeOutput(ctx context.Context, config TestStepConfig, stepName string) ([]langschema.ColumnSchema, error) {
 	if config.Foo == "trigger-error" {
 		return nil, errors.New("mock dynamic output error")
 	}
-	return []pluginschema.ColSchema{
-		{Name: "dynamic_out_col", Type: "string"},
+
+	return []langschema.ColumnSchema{
+		{Name: "dynamic_out_col", ArrowType: "utf8"},
 	}, nil
 }
 
@@ -115,6 +119,7 @@ func TestRegister(t *testing.T) {
 		// Verify step registration
 		steps := reg.AllSteps()
 		assert.Len(t, steps, 1)
+
 		stepReg, exists := reg.GetStep("simple_step")
 		assert.True(t, exists)
 		assert.Equal(t, "simple_step", stepReg.Name)
@@ -198,13 +203,13 @@ func TestResolveSchema(t *testing.T) {
 			ConfigJSON: `{"foo": "test"}`,
 		})
 		assert.Empty(t, resp.Error)
-		assert.Len(t, resp.Input.Fields, 1)
-		assert.Equal(t, "Bar", resp.Input.Fields[0].Name)
-		assert.Equal(t, "utf8", resp.Input.Fields[0].ArrowType)
+		assert.Len(t, resp.Input.Columns, 1)
+		assert.Equal(t, "Bar", resp.Input.Columns[0].Name)
+		assert.Equal(t, "utf8", resp.Input.Columns[0].ArrowType)
 
-		assert.Len(t, resp.Output.Fields, 1)
-		assert.Equal(t, "Baz", resp.Output.Fields[0].Name)
-		assert.Equal(t, "utf8", resp.Output.Fields[0].ArrowType)
+		assert.Len(t, resp.Output.Columns, 1)
+		assert.Equal(t, "Baz", resp.Output.Columns[0].Name)
+		assert.Equal(t, "utf8", resp.Output.Columns[0].ArrowType)
 	})
 
 	t.Run("dynamic schema resolution success", func(t *testing.T) {
@@ -219,16 +224,16 @@ func TestResolveSchema(t *testing.T) {
 		assert.Empty(t, resp.Error)
 
 		// Input schema is resolved dynamically
-		assert.Len(t, resp.Input.Fields, 2)
-		assert.Equal(t, "dynamic_in_col", resp.Input.Fields[0].Name)
-		assert.Equal(t, "utf8", resp.Input.Fields[0].ArrowType) // string gets converted to utf8
-		assert.Equal(t, "dynamic_in_int", resp.Input.Fields[1].Name)
-		assert.Equal(t, "int32", resp.Input.Fields[1].ArrowType)
+		assert.Len(t, resp.Input.Columns, 2)
+		assert.Equal(t, "dynamic_in_col", resp.Input.Columns[0].Name)
+		assert.Equal(t, "utf8", resp.Input.Columns[0].ArrowType) // string gets converted to utf8
+		assert.Equal(t, "dynamic_in_int", resp.Input.Columns[1].Name)
+		assert.Equal(t, "int32", resp.Input.Columns[1].ArrowType)
 
 		// Output schema is resolved dynamically
-		assert.Len(t, resp.Output.Fields, 1)
-		assert.Equal(t, "dynamic_out_col", resp.Output.Fields[0].Name)
-		assert.Equal(t, "utf8", resp.Output.Fields[0].ArrowType)
+		assert.Len(t, resp.Output.Columns, 1)
+		assert.Equal(t, "dynamic_out_col", resp.Output.Columns[0].Name)
+		assert.Equal(t, "utf8", resp.Output.Columns[0].ArrowType)
 	})
 
 	t.Run("dynamic schema resolution input error", func(t *testing.T) {
@@ -261,6 +266,7 @@ func TestInitResource(t *testing.T) {
 
 		res, err := reg.GetResource("res-1")
 		require.NoError(t, err)
+
 		testRes, ok := res.(*MyTestResource)
 		require.True(t, ok)
 		assert.True(t, testRes.InitCalled)
@@ -274,6 +280,7 @@ func TestInitResource(t *testing.T) {
 
 		resCached, err := reg.GetResource("res-1")
 		require.NoError(t, err)
+
 		testRes2, ok := resCached.(*MyTestResource)
 		require.True(t, ok)
 		assert.Same(t, testRes, testRes2)
@@ -347,10 +354,12 @@ func TestCloseAllResources(t *testing.T) {
 
 	res1, err := reg.GetResource("res-1")
 	require.NoError(t, err)
+
 	testRes1 := res1.(*MyTestResource)
 
 	res2, err := reg.GetResource("res-2")
 	require.NoError(t, err)
+
 	testRes2 := res2.(*MyTestResource)
 
 	assert.False(t, testRes1.CloseCalled)
@@ -372,6 +381,7 @@ func TestResourceMonitor(t *testing.T) {
 
 	res1, err := reg.GetResource("res-1")
 	require.NoError(t, err)
+
 	testRes1 := res1.(*MyTestResource)
 
 	reg.StartResourceMonitor(10 * time.Millisecond)

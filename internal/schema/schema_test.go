@@ -23,19 +23,19 @@ func TestExtractSchema(t *testing.T) {
 	require.NotNil(t, s)
 
 	// 2. Validate fields
-	assert.Equal(t, 3, len(s.Fields))
+	assert.Equal(t, 3, len(s.Columns))
 
 	// Field 0: ID
-	assert.Equal(t, "ID", s.Fields[0].Name)
-	assert.Equal(t, "int64", s.Fields[0].ArrowType)
+	assert.Equal(t, "ID", s.Columns[0].Name)
+	assert.Equal(t, "int64", s.Columns[0].ArrowType)
 
 	// Field 1: Email
-	assert.Equal(t, "Email", s.Fields[1].Name)
-	assert.Equal(t, "utf8", s.Fields[1].ArrowType)
+	assert.Equal(t, "Email", s.Columns[1].Name)
+	assert.Equal(t, "utf8", s.Columns[1].ArrowType)
 
 	// Field 2: Active
-	assert.Equal(t, "Active", s.Fields[2].Name)
-	assert.Equal(t, "bool", s.Fields[2].ArrowType)
+	assert.Equal(t, "Active", s.Columns[2].Name)
+	assert.Equal(t, "bool", s.Columns[2].ArrowType)
 }
 
 type MySubStruct struct {
@@ -51,16 +51,15 @@ func TestExtractSchema_Struct(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
-	require.Equal(t, 1, len(s.Fields))
-	assert.Equal(t, "Nested", s.Fields[0].Name)
-	assert.Equal(t, "struct", s.Fields[0].ArrowType)
+	require.Equal(t, 1, len(s.Columns))
+	assert.Equal(t, "Nested", s.Columns[0].Name)
+	assert.Equal(t, "struct", s.Columns[0].ArrowType)
 }
 
 func TestExtractConfigSchema(t *testing.T) {
 	type ConfigTest struct {
 		Name    string
 		Timeout int
-		hidden  string
 	}
 
 	s, err := ExtractFieldSchema(reflect.TypeFor[ConfigTest]())

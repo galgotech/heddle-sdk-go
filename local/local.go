@@ -3,15 +3,17 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/galgotech/heddle-lang/pkg/logger"
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
+	"go.uber.org/zap"
+
 	"github.com/galgotech/heddle-sdk-go/internal/executor/execute"
 	"github.com/galgotech/heddle-sdk-go/internal/executor/history"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
 	"github.com/galgotech/heddle-sdk-go/plugin"
-	"go.uber.org/zap"
 )
 
 type LocalRunner struct {
@@ -39,6 +41,13 @@ func (r *LocalRunner) Execute(ctx context.Context, stepName string, configJSON a
 	if err != nil {
 		logger.L().Fatal("error marshalling configJSON", zap.Error(err))
 	}
+
+	columns, err := execute.ExtractOutput(reflect.ValueOf(input))
+	if err != nil {
+		logger.L().Fatal("error extracting output", zap.Error(err))
+	}
+
+	r.localHistory.Add("input", columns)
 
 	inputReferences := map[string]string{}
 	resources := map[string]baseplugin.ResourceDefinition{}

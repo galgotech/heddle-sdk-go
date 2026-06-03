@@ -50,7 +50,7 @@ func (r Any) Slices() map[string][]any {
 	return r.state.slices
 }
 
-func NewFrameAnyArray(frame Any, fieldsSchema schema.FieldSchema, dataArr map[string]arrow.Array) error {
+func NewFrameAnyArray(frame any, fieldsSchema schema.FieldSchema, dataArr map[string]arrow.Array) error {
 	t := getRtype(frame)
 	if t.kind&0x1f != KindPointer {
 		return fmt.Errorf("type is not a pointer")

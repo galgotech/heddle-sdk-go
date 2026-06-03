@@ -46,14 +46,14 @@ func NewFrame[T any](columnsSchema []schema.ColumnSchema, data []T) (Frame[T], e
 		fields = append(fields, field)
 	}
 
-	columns := make([][]any, len(fields))
-	for j := range fields {
-		columns[j] = make([]any, len(data))
+	columns := make(map[string][]any, len(fields))
+	for _, field := range fields {
+		columns[field.name.Name()] = make([]any, len(data))
 	}
 
 	for i := range data {
 		ptr := unsafe.Pointer(&data[i])
-		for j, field := range fields {
+		for _, field := range fields {
 			valPtr := unsafe.Add(ptr, field.offset)
 
 			var val any
@@ -89,7 +89,7 @@ func NewFrame[T any](columnsSchema []schema.ColumnSchema, data []T) (Frame[T], e
 				val = *(*string)(valPtr)
 			}
 
-			columns[j][i] = val
+			columns[field.name.Name()][i] = val
 		}
 	}
 
@@ -151,8 +151,8 @@ func NewFrameArray(frame any, columnsSchema []schema.ColumnSchema, dataArr map[s
 		return fmt.Errorf("columns schema length %d does not match fields length %d", len(columnsSchema), len(fields))
 	}
 
-	columnsFrame := make([][]any, len(fields))
-	for i, field := range fields {
+	columnsFrame := make(map[string][]any, len(fields))
+	for _, field := range fields {
 		var colName string
 
 		for _, col := range columnsSchema {
@@ -172,68 +172,69 @@ func NewFrameArray(frame any, columnsSchema []schema.ColumnSchema, dataArr map[s
 		}
 
 		length := valueArray.Len()
-		columnsFrame[i] = make([]any, length)
+		fieldName := field.name.Name()
+		columnsFrame[fieldName] = make([]any, length)
 
 		switch valueArray.DataType().ID() {
 		case arrow.INT8:
 			arr := valueArray.(*array.Int8)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.INT16:
 			arr := valueArray.(*array.Int16)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.INT32:
 			arr := valueArray.(*array.Int32)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.INT64:
 			arr := valueArray.(*array.Int64)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.UINT8:
 			arr := valueArray.(*array.Uint8)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.UINT16:
 			arr := valueArray.(*array.Uint16)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.UINT32:
 			arr := valueArray.(*array.Uint32)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.UINT64:
 			arr := valueArray.(*array.Uint64)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.FLOAT32:
 			arr := valueArray.(*array.Float32)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.FLOAT64:
 			arr := valueArray.(*array.Float64)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.BOOL:
 			arr := valueArray.(*array.Boolean)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		case arrow.STRING:
 			arr := valueArray.(*array.String)
 			for idx := range length {
-				columnsFrame[i][idx] = arr.Value(idx)
+				columnsFrame[fieldName][idx] = arr.Value(idx)
 			}
 		default:
 			return fmt.Errorf("unsupported data type: %s", valueArray.DataType().ID())

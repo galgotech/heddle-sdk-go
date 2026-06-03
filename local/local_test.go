@@ -26,7 +26,7 @@ type OutputA struct {
 
 type PluginASteps struct{}
 
-func (s *PluginASteps) StepA(ctx context.Context, cfg ConfigA, in schema.Frame[InputA], out schema.Frame[OutputA]) error {
+func (s PluginASteps) StepA(ctx context.Context, cfg ConfigA, in schema.Frame[InputA], out schema.Frame[OutputA]) error {
 	in.Each(func(item InputA) {
 		out.Add(OutputA{
 			OutVal: item.InVal + "_pA",
@@ -38,7 +38,7 @@ func (s *PluginASteps) StepA(ctx context.Context, cfg ConfigA, in schema.Frame[I
 
 type PluginBSteps struct{}
 
-func (s *PluginBSteps) StepB(ctx context.Context, cfg ConfigA, in schema.Frame[OutputA], out schema.Frame[OutputA]) error {
+func (s PluginBSteps) StepB(ctx context.Context, cfg ConfigA, in schema.Frame[OutputA], out schema.Frame[OutputA]) error {
 	in.Each(func(item OutputA) {
 		out.Add(OutputA{
 			OutVal: item.OutVal + "_pB",
@@ -50,11 +50,11 @@ func (s *PluginBSteps) StepB(ctx context.Context, cfg ConfigA, in schema.Frame[O
 
 func TestLocalRunnerMultiplePlugins(t *testing.T) {
 	pA := plugin.New("pluginA")
-	err := pA.Register(&PluginASteps{})
+	err := pA.Register(PluginASteps{})
 	require.NoError(t, err)
 
 	pB := plugin.New("pluginB")
-	err = pB.Register(&PluginBSteps{})
+	err = pB.Register(PluginBSteps{})
 	require.NoError(t, err)
 
 	runner := local.NewLocalRunner(pA, pB)

@@ -45,7 +45,7 @@ func TestNewFrameAnyArrayAndEach(t *testing.T) {
 
 	var frame Any
 
-	err := NewFrameAnyArray(frame, fieldsSchema, dataArr)
+	err := NewFrameAnyArray(&frame, fieldsSchema, dataArr)
 	require.NoError(t, err)
 
 	var iterated []map[string]any

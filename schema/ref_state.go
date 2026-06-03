@@ -11,7 +11,7 @@ type refState struct {
 	rowOffset int
 }
 
-func newRefState(tType *rtype, columns [][]any) (*refState, error) {
+func newRefState(tType *rtype, columns map[string][]any) (*refState, error) {
 	if tType.kind&0x1f == KindPointer {
 		return nil, fmt.Errorf("type is a pointer")
 	}
@@ -30,10 +30,6 @@ func newRefState(tType *rtype, columns [][]any) (*refState, error) {
 		fields = append(fields, field)
 	}
 
-	if len(columns) != len(fields) {
-		return nil, fmt.Errorf("columns length %d does not match fields length %d", len(columns), len(fields))
-	}
-
 	slices := make(map[string][]any)
 	kinds := make([]uint8, len(fields))
 	offsets := make([]uintptr, len(fields))
@@ -42,7 +38,11 @@ func newRefState(tType *rtype, columns [][]any) (*refState, error) {
 	for i := 0; i < len(fields); i++ {
 		field := fields[i]
 		fieldName := field.name.Name()
-		slices[fieldName] = columns[i]
+		col, ok := columns[fieldName]
+		if !ok {
+			return nil, fmt.Errorf("missing column for field %s", fieldName)
+		}
+		slices[fieldName] = col
 		kinds[i] = field.typ.kind & 0x1f
 		offsets[i] = field.offset
 		names[i] = fieldName

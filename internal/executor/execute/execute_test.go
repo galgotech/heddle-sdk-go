@@ -7,10 +7,12 @@ import (
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
 	"github.com/apache/arrow/go/v18/arrow/memory"
-	"github.com/galgotech/heddle-sdk-go/internal/registry"
-	"github.com/galgotech/heddle-sdk-go/schema"
+	langschema "github.com/galgotech/heddle-lang/pkg/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/galgotech/heddle-sdk-go/internal/registry"
+	"github.com/galgotech/heddle-sdk-go/schema"
 )
 
 type DummyConfig struct {
@@ -112,6 +114,18 @@ func TestPrepareInput(t *testing.T) {
 
 		step := registry.StepRegistration{
 			InputType: reflect.TypeFor[schema.Frame[DummyInput]](),
+			InputSchema: langschema.FrameSchema{
+				Columns: []langschema.ColumnSchema{
+					{
+						Name:      "ID",
+						ArrowType: "int32",
+					},
+					{
+						Name:      "Name",
+						ArrowType: "utf8",
+					},
+				},
+			},
 		}
 
 		val, err := prepareInput(step, columns)

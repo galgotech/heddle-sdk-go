@@ -132,7 +132,7 @@ func unifiedExecute(ctx context.Context, registry registry.Registry, request Exe
 	}
 
 	// 8. Output processing - extract columns from outputVal Ref[Out]
-	columns, err := extractOutput(outputVal)
+	columns, err := ExtractOutput(outputVal)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func prepareInput(step registry.StepRegistration, columns map[string]arrow.Array
 	return refVal, nil
 }
 
-func extractOutput(outputVal reflect.Value) (map[string]arrow.Array, error) {
+func ExtractOutput(outputVal reflect.Value) (map[string]arrow.Array, error) {
 	method := outputVal.MethodByName("Slices")
 	if !method.IsValid() {
 		return nil, fmt.Errorf("Slices method not found on output type %s", outputVal.Type())

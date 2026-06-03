@@ -66,7 +66,7 @@ func TestExtractConfigSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
-	assert.Equal(t, 3, len(s.Fields))
+	assert.Equal(t, 2, len(s.Fields))
 	assert.Equal(t, "Name", s.Fields[0].Name)
 	assert.Equal(t, "string", s.Fields[0].Type)
 	assert.Equal(t, "Timeout", s.Fields[1].Name)

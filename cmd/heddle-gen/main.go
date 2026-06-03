@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/format"
@@ -30,9 +31,11 @@ func toSnakeCase(s string) string {
 }
 
 type FieldInfo struct {
-	Name      string
-	ArrowType string
-	GoType    string
+	Name        string
+	ArrowType   string
+	GoType      string
+	IsNested    bool
+	InnerStruct StructInfo
 }
 
 type StructInfo struct {
@@ -54,6 +57,10 @@ type ResourceInfo struct {
 }
 
 func main() {
+	var targetStruct string
+	flag.StringVar(&targetStruct, "struct", "Steps", "Name of the target struct")
+	flag.Parse()
+
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", nil, parser.ParseComments)
 	if err != nil {
@@ -73,7 +80,7 @@ func main() {
 				case *ast.TypeSpec:
 					if s, ok := x.Type.(*ast.StructType); ok {
 						structs[x.Name.Name] = s
-						if x.Name.Name == "Steps" {
+						if x.Name.Name == targetStruct {
 							stepsStruct = s
 						}
 					}
@@ -95,7 +102,7 @@ func main() {
 	}
 
 	if stepsStruct == nil {
-		log.Fatal("Could not find Steps struct")
+		log.Fatalf("Could not find struct %s", targetStruct)
 	}
 
 	var resources []ResourceInfo
@@ -121,7 +128,7 @@ func main() {
 	}
 
 	var steps []StepInfo
-	for _, method := range methods["Steps"] {
+	for _, method := range methods[targetStruct] {
 		if method.Name.Name == "ResolveTypeInput" || method.Name.Name == "ResolveTypeOutput" {
 			continue
 		}
@@ -211,9 +218,10 @@ func main() {
 
 	var buf bytes.Buffer
 	err = tmpl.Execute(&buf, map[string]interface{}{
-		"Package":   pkgName,
-		"Steps":     steps,
-		"Resources": resources,
+		"Package":    pkgName,
+		"StructName": targetStruct,
+		"Steps":      steps,
+		"Resources":  resources,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -225,7 +233,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = os.WriteFile("example_steps.gen.go", formatted, 0644)
+	fileName := fmt.Sprintf("%s_steps.gen.go", toSnakeCase(targetStruct))
+	err = os.WriteFile(fileName, formatted, 0644)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -262,7 +271,16 @@ func extractStructInfo(name string, structs map[string]*ast.StructType) StructIn
 		}
 		goType := typeToString(field.Type)
 		if strings.HasPrefix(goType, "schema.Frame") {
-			continue // nested frame not supported perfectly yet, omit from arrow columns
+			innerType := strings.TrimSuffix(strings.TrimPrefix(goType, "schema.Frame["), "]")
+			innerStruct := extractStructInfo(innerType, structs)
+			info.Fields = append(info.Fields, FieldInfo{
+				Name:        field.Names[0].Name,
+				GoType:      goType,
+				ArrowType:   "list",
+				IsNested:    true,
+				InnerStruct: innerStruct,
+			})
+			continue
 		}
 		info.Fields = append(info.Fields, FieldInfo{
 			Name:      field.Names[0].Name,
@@ -317,11 +335,11 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/memory"
 
 	"github.com/galgotech/heddle-lang/pkg/schema"
-	"github.com/galgotech/heddle-sdk-go/internal/registry"
+	"github.com/galgotech/heddle-sdk-go/registry"
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
-func RegisterSteps(reg registry.Registry, steps *Steps) error {
+func Register{{.StructName}}Steps(reg registry.Registry, steps *{{.StructName}}) error {
 	var err error
 
 	{{range .Resources}}
@@ -390,7 +408,14 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 
 			{{if .Input.Name}}
 			{{range .Input.Fields}}
+			{{if .IsNested}}
+			var in_{{.Name}} *array.List
+			if col, ok := inColumns["{{.Name}}"]; ok && col != nil {
+				in_{{.Name}} = col.(*array.List)
+			}
+			{{else}}
 			in_{{.Name}} := inColumns["{{.Name}}"].({{arrowArrayType .ArrowType}})
+			{{end}}
 			{{end}}
 			
 			inLen := 0
@@ -403,9 +428,56 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 			inFrame := pluginschema.Frame[{{.Input.Name}}]{
 				Iterator: func(yield func(item {{.Input.Name}})) error {
 					for i := 0; i < inLen; i++ {
+						{{range .Input.Fields}}
+						{{if .IsNested}}
+						var nestedFrame_{{.Name}} pluginschema.Frame[{{.InnerStruct.Name}}]
+						if in_{{.Name}} != nil && !in_{{.Name}}.IsNull(i) {
+							start := int(in_{{.Name}}.Offsets()[i])
+							end := int(in_{{.Name}}.Offsets()[i+1])
+							listValues := in_{{.Name}}.ListValues()
+							
+							if structArr, ok := listValues.(*array.Struct); ok {
+								{{range .InnerStruct.Fields}}
+								var l_{{.Name}} {{arrowArrayType .ArrowType}}
+								{{end}}
+								
+								for c := 0; c < structArr.NumField(); c++ {
+									field := structArr.DataType().(*arrow.StructType).Field(c)
+									colArr := structArr.Field(c)
+									switch field.Name {
+									{{range .InnerStruct.Fields}}
+									case "{{.Name}}":
+										l_{{.Name}}, _ = colArr.({{arrowArrayType .ArrowType}})
+									{{end}}
+									}
+								}
+								
+								nestedFrame_{{.Name}} = pluginschema.Frame[{{.InnerStruct.Name}}]{
+									Iterator: func(y func(m {{.InnerStruct.Name}})) error {
+										for j := start; j < end; j++ {
+											m := {{.InnerStruct.Name}}{}
+											{{range .InnerStruct.Fields}}
+											if l_{{.Name}} != nil && !l_{{.Name}}.IsNull(j) {
+												m.{{.Name}} = l_{{.Name}}.Value(j)
+											}
+											{{end}}
+											y(m)
+										}
+										return nil
+									},
+								}
+							}
+						}
+						{{end}}
+						{{end}}
+
 						item := {{.Input.Name}}{
 							{{range .Input.Fields}}
+							{{if .IsNested}}
+							{{.Name}}: nestedFrame_{{.Name}},
+							{{else}}
 							{{.Name}}: in_{{.Name}}.Value(i),
+							{{end}}
 							{{end}}
 						}
 						yield(item)
@@ -466,18 +538,4 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 	return nil
 }
 
-func toSnakeCase(s string) string {
-	var res []rune
-	for i, r := range s {
-		if r >= 'A' && r <= 'Z' {
-			if i > 0 {
-				res = append(res, '_')
-			}
-			res = append(res, r+32)
-		} else {
-			res = append(res, r)
-		}
-	}
-	return string(res)
-}
 `

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/galgotech/heddle-sdk-go/internal/registry"
+	"github.com/galgotech/heddle-sdk-go/registry"
 	"github.com/galgotech/heddle-sdk-go/local"
 	"github.com/galgotech/heddle-sdk-go/plugin"
 	"github.com/galgotech/heddle-sdk-go/schema"

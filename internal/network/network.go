@@ -21,7 +21,7 @@ import (
 	"github.com/galgotech/heddle-lang/pkg/schema"
 
 	"github.com/galgotech/heddle-sdk-go/internal/executor/execute"
-	"github.com/galgotech/heddle-sdk-go/internal/registry"
+	"github.com/galgotech/heddle-sdk-go/registry"
 )
 
 type flightNetworkClient struct {

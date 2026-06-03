@@ -8,7 +8,7 @@ import (
 	"github.com/apache/arrow/go/v18/arrow"
 	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
 
-	"github.com/galgotech/heddle-sdk-go/internal/registry"
+	"github.com/galgotech/heddle-sdk-go/registry"
 )
 
 // Executor defines a generic interface for executing a step

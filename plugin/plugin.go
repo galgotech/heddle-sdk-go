@@ -3,7 +3,7 @@ package plugin
 import (
 	"strings"
 
-	"github.com/galgotech/heddle-sdk-go/internal/registry"
+	"github.com/galgotech/heddle-sdk-go/registry"
 )
 
 const Language = "go"

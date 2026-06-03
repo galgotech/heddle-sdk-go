@@ -99,12 +99,12 @@ func SliceToArrowArray(sliceAny any) (arrow.Array, error) {
 		return b.NewArray(), nil
 	default:
 		val := reflect.ValueOf(sliceAny)
-		elemType := val.Type().Elem()
 
 		if val.Kind() != reflect.Slice {
 			return nil, fmt.Errorf("SliceToArrowArray: expected slice, got %T", sliceAny)
 		}
 
+		elemType := val.Type().Elem()
 		switch elemType.Kind() {
 		case reflect.Int8:
 			b := array.NewInt8Builder(mem)

@@ -18,7 +18,7 @@ type Frame[T any] struct {
 	_     T
 }
 
-func NewFrame[T any](columnsSchema []schema.ColumnSchema, data []T) (Frame[T], error) {
+func NewFrame[T any](data []T) (Frame[T], error) {
 	frame := Frame[T]{}
 
 	var zero T

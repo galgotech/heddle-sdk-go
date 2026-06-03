@@ -61,7 +61,7 @@ func TestLocalRunnerMultiplePlugins(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Run StepA on PluginA using fully-qualified namespaced step name
-	inA, _ := schema.NewFrame(nil, []InputA{{InVal: "test"}})
+	inA, _ := schema.NewFrame([]InputA{{InVal: "test"}})
 	resA := runner.Execute(ctx, "pluginA.step_a", ConfigA{Param: "xyz"}, inA)
 	require.NotNil(t, resA)
 

@@ -16,8 +16,12 @@ func NewCompositeRegistry(registries map[string]Registry) Registry {
 	return &compositeRegistry{registries: registries}
 }
 
-func (c *compositeRegistry) Register(structStep any) error {
-	return fmt.Errorf("Register not supported on composite registry")
+func (c *compositeRegistry) RegisterStep(step StepRegistration) error {
+	return fmt.Errorf("RegisterStep not supported on composite registry")
+}
+
+func (c *compositeRegistry) RegisterResource(res ResourceRegistration) error {
+	return fmt.Errorf("RegisterResource not supported on composite registry")
 }
 
 func (c *compositeRegistry) ResolveSchema(request plugin.ResolveSchemaRequest) plugin.ResolveSchemaResponse {

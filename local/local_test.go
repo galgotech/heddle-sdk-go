@@ -4,9 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/apache/arrow/go/v18/arrow"
+	"github.com/apache/arrow/go/v18/arrow/array"
+	"github.com/apache/arrow/go/v18/arrow/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/galgotech/heddle-sdk-go/internal/registry"
 	"github.com/galgotech/heddle-sdk-go/local"
 	"github.com/galgotech/heddle-sdk-go/plugin"
 	"github.com/galgotech/heddle-sdk-go/schema"
@@ -50,42 +54,69 @@ func (s PluginBSteps) StepB(ctx context.Context, cfg ConfigA, in schema.Frame[Ou
 
 func TestLocalRunnerMultiplePlugins(t *testing.T) {
 	pA := plugin.New("pluginA")
-	err := pA.Register(PluginASteps{})
+	regA := pA.Registry()
+	err := regA.RegisterStep(registry.StepRegistration{
+		Name: "step_a",
+		Invoke: func(ctx context.Context, configJSON string, inColumns map[string]arrow.Array) (map[string]arrow.Array, error) {
+			in_Val := inColumns["InVal"].(*array.String)
+			outBuilder_OutVal := array.NewStringBuilder(memory.DefaultAllocator)
+			defer outBuilder_OutVal.Release()
+
+			for i := 0; i < in_Val.Len(); i++ {
+				outBuilder_OutVal.Append(in_Val.Value(i) + "_pA")
+			}
+
+			return map[string]arrow.Array{
+				"OutVal": outBuilder_OutVal.NewArray(),
+			}, nil
+		},
+	})
 	require.NoError(t, err)
 
 	pB := plugin.New("pluginB")
-	err = pB.Register(PluginBSteps{})
+	regB := pB.Registry()
+	err = regB.RegisterStep(registry.StepRegistration{
+		Name: "step_b",
+		Invoke: func(ctx context.Context, configJSON string, inColumns map[string]arrow.Array) (map[string]arrow.Array, error) {
+			in_OutVal := inColumns["OutVal"].(*array.String)
+			outBuilder_OutVal := array.NewStringBuilder(memory.DefaultAllocator)
+			defer outBuilder_OutVal.Release()
+
+			for i := 0; i < in_OutVal.Len(); i++ {
+				outBuilder_OutVal.Append(in_OutVal.Value(i) + "_pB")
+			}
+
+			return map[string]arrow.Array{
+				"OutVal": outBuilder_OutVal.NewArray(),
+			}, nil
+		},
+	})
 	require.NoError(t, err)
 
 	runner := local.NewLocalRunner(pA, pB)
 	ctx := context.Background()
 
 	// 1. Run StepA on PluginA using fully-qualified namespaced step name
-	inA, _ := schema.NewFrame([]InputA{{InVal: "test"}})
-	resA := runner.Execute(ctx, "pluginA.step_a", ConfigA{Param: "xyz"}, inA)
+	inBuilder := array.NewStringBuilder(memory.DefaultAllocator)
+	inBuilder.Append("test")
+	defer inBuilder.Release()
+
+	inA := map[string]arrow.Array{
+		"InVal": inBuilder.NewArray(),
+	}
+
+	resA := runner.Execute(ctx, "pluginA.step_a", `{"param":"xyz"}`, inA)
 	require.NotNil(t, resA)
 
-	outA, ok := resA.(schema.Frame[OutputA])
+	outAArr, ok := resA["OutVal"].(*array.String)
 	require.True(t, ok)
-
-	var valA string
-
-	outA.Each(func(item OutputA) {
-		valA = item.OutVal
-	})
-	assert.Equal(t, "test_pA", valA)
+	assert.Equal(t, "test_pA", outAArr.Value(0))
 
 	// 2. Run StepB on PluginB using fully-qualified namespaced step name (auto-chaining via history / simulated SHM)
-	resB := runner.Execute(ctx, "pluginB.step_b", ConfigA{Param: "xyz"}, nil)
+	resB := runner.Execute(ctx, "pluginB.step_b", `{"param":"xyz"}`, nil)
 	require.NotNil(t, resB)
 
-	outB, ok := resB.(schema.Frame[OutputA])
+	outBArr, ok := resB["OutVal"].(*array.String)
 	require.True(t, ok)
-
-	var valB string
-
-	outB.Each(func(item OutputA) {
-		valB = item.OutVal
-	})
-	assert.Equal(t, "test_pA_pB", valB)
+	assert.Equal(t, "test_pA_pB", outBArr.Value(0))
 }

@@ -1,27 +1,22 @@
 package registry
 
 import (
-	"reflect"
+	"context"
 
+	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/galgotech/heddle-lang/pkg/schema"
 )
 
 type StepRegistration struct {
 	Name         string
-	StructType   reflect.Type // pointer to struct
 	ConfigSchema schema.FieldSchema
-	ConfigType   reflect.Type  // struct
-	InputType    reflect.Type  // pointer to struct
-	OutputType   reflect.Type  // pointer to struct
-	Func         reflect.Value // method
 	InputSchema  schema.FrameSchema
 	OutputSchema schema.FrameSchema
+
+	Invoke func(ctx context.Context, configJSON string, inColumns map[string]arrow.Array) (map[string]arrow.Array, error)
 
 	Documentation string
 	SourceCode    string
 	SourceFile    string
 	SourceLine    int
-
-	InputFieldsIndex  []int
-	OutputFieldsIndex []int
 }

@@ -2,8 +2,6 @@ package local
 
 import (
 	"context"
-	"encoding/json"
-	"reflect"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/galgotech/heddle-lang/pkg/logger"
@@ -36,18 +34,10 @@ func NewLocalRunner(plugins ...*plugin.Plugin) *LocalRunner {
 	}
 }
 
-func (r *LocalRunner) Execute(ctx context.Context, stepName string, configJSON any, input any) any {
-	configBytes, err := json.Marshal(configJSON)
-	if err != nil {
-		logger.L().Fatal("error marshalling configJSON", zap.Error(err))
+func (r *LocalRunner) Execute(ctx context.Context, stepName string, configJSON string, input map[string]arrow.Array) map[string]arrow.Array {
+	if input != nil {
+		r.localHistory.Add("input", input)
 	}
-
-	columns, err := execute.ExtractOutput(reflect.ValueOf(input))
-	if err != nil {
-		logger.L().Fatal("error extracting output", zap.Error(err))
-	}
-
-	r.localHistory.Add("input", columns)
 
 	inputReferences := map[string]string{}
 	resources := map[string]baseplugin.ResourceDefinition{}
@@ -56,17 +46,19 @@ func (r *LocalRunner) Execute(ctx context.Context, stepName string, configJSON a
 		WorkflowID: "",
 		TaskID:     "",
 		StepName:   stepName,
-		ConfigJSON: string(configBytes),
+		ConfigJSON: configJSON,
 		InputRef:   inputReferences,
 		Resources:  resources,
 	}
 
-	res, err := r.localExecutor.Execute(ctx, localInput)
+	_, err := r.localExecutor.Execute(ctx, localInput)
 	if err != nil {
 		logger.L().Fatal("error executing step", zap.Error(err))
 	}
 
-	return res.OutputRef
+	// We return the output directly from simulated history instead of parsing handles
+	outputHistory := r.localHistory.GetSimulatedSHM()
+	return outputHistory
 }
 
 func (r *LocalRunner) GetHistory() []string {

@@ -2,17 +2,15 @@ package execute
 
 import (
 	"context"
-	"fmt"
 	"maps"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/galgotech/heddle-lang/pkg/logger"
-	"github.com/galgotech/heddle-lang/pkg/plugin"
+	baseplugin "github.com/galgotech/heddle-lang/pkg/plugin"
 	"go.uber.org/zap"
 
 	"github.com/galgotech/heddle-sdk-go/internal/executor/history"
 	"github.com/galgotech/heddle-sdk-go/internal/registry"
-	"github.com/galgotech/heddle-sdk-go/internal/schema"
 )
 
 type LocalExecutor struct {
@@ -27,41 +25,12 @@ func NewLocalExecutor(registry registry.Registry, localHistory history.LocalHist
 	}
 }
 
-func (e *LocalExecutor) Execute(ctx context.Context, input plugin.ExecuteStepRequest) (plugin.ExecuteStepResponse, error) {
+func (e *LocalExecutor) Execute(ctx context.Context, input baseplugin.ExecuteStepRequest) (baseplugin.ExecuteStepResponse, error) {
 	stepName := input.StepName
 	configJSON := input.ConfigJSON
 
-	step, ok := e.registry.GetStep(stepName)
-	if !ok {
-		logger.L().Fatal("step not found", zap.String("stepName", stepName))
-
-		return plugin.ExecuteStepResponse{
-			TaskID:       input.TaskID,
-			Status:       plugin.StepResponseError,
-			ErrorMessage: fmt.Sprintf("step not found: %s", stepName),
-		}, nil
-	}
-
-	// 1. Resolve resources from local bindings
+	// 1. Resources are injected by the generated Invoke closure using reg.GetResource
 	resources := make(map[string]any)
-
-	t := step.StructType
-	for fieldType := range t.Fields() {
-		if schema.IsResource(fieldType.Type) {
-			fieldName := fieldType.Name
-
-			inst, err := e.registry.GetResource(fieldName)
-			if err != nil {
-				return plugin.ExecuteStepResponse{
-					TaskID:       input.TaskID,
-					Status:       plugin.StepResponseError,
-					ErrorMessage: fmt.Sprintf("failed to get resource %s: %v", fieldName, err),
-				}, nil
-			}
-
-			resources[fieldName] = inst
-		}
-	}
 
 	// 2. Resolve columns or raw input
 	// Auto chaining from simulated SHM history
@@ -81,9 +50,9 @@ func (e *LocalExecutor) Execute(ctx context.Context, input plugin.ExecuteStepReq
 	if err != nil {
 		logger.L().Fatal("step execution failed", zap.String("stepName", stepName), zap.Error(err))
 
-		return plugin.ExecuteStepResponse{
+		return baseplugin.ExecuteStepResponse{
 			TaskID:       input.TaskID,
-			Status:       plugin.StepResponseError,
+			Status:       baseplugin.StepResponseError,
 			ErrorMessage: err.Error(),
 		}, nil
 	}
@@ -93,8 +62,8 @@ func (e *LocalExecutor) Execute(ctx context.Context, input plugin.ExecuteStepReq
 		e.localHistory.Add(stepName, result.Columns)
 	}
 
-	return plugin.ExecuteStepResponse{
+	return baseplugin.ExecuteStepResponse{
 		TaskID: input.TaskID,
-		Status: plugin.StepResponseSuccess,
+		Status: baseplugin.StepResponseSuccess,
 	}, nil
 }

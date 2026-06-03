@@ -15,9 +15,7 @@ type Plugin struct {
 	registry registry.Registry
 }
 
-func (p *Plugin) Register(structWithSteps any) error {
-	return p.registry.Register(structWithSteps)
-}
+
 
 func (p *Plugin) Registry() registry.Registry {
 	return p.registry

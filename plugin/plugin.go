@@ -3,10 +3,13 @@ package plugin
 import (
 	"strings"
 
-	"github.com/galgotech/heddle-sdk-go/registry"
+	"github.com/galgotech/heddle-sdk-go/internal/registry"
 )
 
 const Language = "go"
+
+type StepRegistration = registry.StepRegistration
+type ResourceRegistration = registry.ResourceRegistration
 
 type Plugin struct {
 	Namespace string
@@ -15,10 +18,16 @@ type Plugin struct {
 	registry registry.Registry
 }
 
-
-
 func (p *Plugin) Registry() registry.Registry {
 	return p.registry
+}
+
+func (p *Plugin) RegisterStep(step StepRegistration) error {
+	return p.registry.RegisterStep(step)
+}
+
+func (p *Plugin) RegisterResource(res ResourceRegistration) error {
+	return p.registry.RegisterResource(res)
 }
 
 func (p *Plugin) GetNamespace() string {

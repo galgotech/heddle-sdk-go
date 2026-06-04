@@ -10,7 +10,7 @@ import (
 
 	"github.com/galgotech/heddle-sdk-go/internal/executor/execute"
 	"github.com/galgotech/heddle-sdk-go/internal/executor/history"
-	"github.com/galgotech/heddle-sdk-go/registry"
+	"github.com/galgotech/heddle-sdk-go/internal/registry"
 	"github.com/galgotech/heddle-sdk-go/plugin"
 )
 

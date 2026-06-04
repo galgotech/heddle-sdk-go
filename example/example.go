@@ -96,7 +96,7 @@ func (s *Steps) Query(ctx context.Context, config QueryConfig, in schema.Frame[Q
 func Start() {
 	p := plugin.New("pg")
 
-	err := RegisterSteps(p.Registry(), &Steps{})
+	err := RegisterSteps(p, &Steps{})
 	if err != nil {
 		logger.L().Error("Failed to register steps", zap.Error(err))
 	}
@@ -108,7 +108,7 @@ func Start() {
 func Run() {
 	p := plugin.New("pg")
 
-	err := RegisterSteps(p.Registry(), &Steps{})
+	err := RegisterSteps(p, &Steps{})
 	if err != nil {
 		logger.L().Error("Failed to register steps", zap.Error(err))
 	}

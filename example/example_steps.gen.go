@@ -10,14 +10,14 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/memory"
 
 	"github.com/galgotech/heddle-lang/pkg/schema"
-	"github.com/galgotech/heddle-sdk-go/registry"
+	"github.com/galgotech/heddle-sdk-go/plugin"
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
-func RegisterSteps(reg registry.Registry, steps *Steps) error {
+func RegisterSteps(p *plugin.Plugin, steps *Steps) error {
 	var err error
 
-	err = reg.RegisterResource(registry.ResourceRegistration{
+	err = p.RegisterResource(plugin.ResourceRegistration{
 		Name: "d_b",
 		Init: func(ctx context.Context, configJSON string) (pluginschema.Resource, error) {
 			var cfg map[string]any
@@ -39,7 +39,7 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 		return err
 	}
 
-	err = reg.RegisterStep(registry.StepRegistration{
+	err = p.RegisterStep(plugin.StepRegistration{
 		Name: "test_producer",
 		ConfigSchema: schema.FieldSchema{
 			Fields: []schema.Field{
@@ -87,7 +87,7 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 
 			// inject resources
 
-			if resInst, err := reg.GetResource("d_b"); err == nil {
+			if resInst, err := p.Registry().GetResource("d_b"); err == nil {
 				if resType, ok := resInst.(*Connection); ok {
 					steps.DB.SetResource(resType)
 				}
@@ -111,7 +111,7 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 		return err
 	}
 
-	err = reg.RegisterStep(registry.StepRegistration{
+	err = p.RegisterStep(plugin.StepRegistration{
 		Name: "query",
 		ConfigSchema: schema.FieldSchema{
 			Fields: []schema.Field{
@@ -124,6 +124,8 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 			Columns: []schema.ColumnSchema{
 
 				{Name: "UserID", ArrowType: "int64"},
+
+				{Name: "SubInput", ArrowType: "list"},
 			},
 		},
 
@@ -146,6 +148,11 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 
 			in_UserID := inColumns["UserID"].(*array.Int64)
 
+			var in_SubInput *array.List
+			if col, ok := inColumns["SubInput"]; ok && col != nil {
+				in_SubInput = col.(*array.List)
+			}
+
 			inLen := 0
 
 			if in_UserID != nil {
@@ -155,9 +162,50 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 			inFrame := pluginschema.Frame[QueryInput]{
 				Iterator: func(yield func(item QueryInput)) error {
 					for i := 0; i < inLen; i++ {
+
+						var nestedFrame_SubInput pluginschema.Frame[SubInput]
+						if in_SubInput != nil && !in_SubInput.IsNull(i) {
+							start := int(in_SubInput.Offsets()[i])
+							end := int(in_SubInput.Offsets()[i+1])
+							listValues := in_SubInput.ListValues()
+
+							if structArr, ok := listValues.(*array.Struct); ok {
+
+								var l_Name *array.String
+
+								for c := 0; c < structArr.NumField(); c++ {
+									field := structArr.DataType().(*arrow.StructType).Field(c)
+									colArr := structArr.Field(c)
+									switch field.Name {
+
+									case "Name":
+										l_Name, _ = colArr.(*array.String)
+
+									}
+								}
+
+								nestedFrame_SubInput = pluginschema.Frame[SubInput]{
+									Iterator: func(y func(m SubInput)) error {
+										for j := start; j < end; j++ {
+											m := SubInput{}
+
+											if l_Name != nil && !l_Name.IsNull(j) {
+												m.Name = l_Name.Value(j)
+											}
+
+											y(m)
+										}
+										return nil
+									},
+								}
+							}
+						}
+
 						item := QueryInput{
 
 							UserID: in_UserID.Value(i),
+
+							SubInput: nestedFrame_SubInput,
 						}
 						yield(item)
 					}
@@ -183,7 +231,7 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 
 			// inject resources
 
-			if resInst, err := reg.GetResource("d_b"); err == nil {
+			if resInst, err := p.Registry().GetResource("d_b"); err == nil {
 				if resType, ok := resInst.(*Connection); ok {
 					steps.DB.SetResource(resType)
 				}
@@ -208,19 +256,4 @@ func RegisterSteps(reg registry.Registry, steps *Steps) error {
 	}
 
 	return nil
-}
-
-func toSnakeCase(s string) string {
-	var res []rune
-	for i, r := range s {
-		if r >= 'A' && r <= 'Z' {
-			if i > 0 {
-				res = append(res, '_')
-			}
-			res = append(res, r+32)
-		} else {
-			res = append(res, r)
-		}
-	}
-	return string(res)
 }

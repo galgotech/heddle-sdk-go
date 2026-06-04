@@ -14,7 +14,7 @@ import (
 	"github.com/galgotech/heddle-lang/pkg/runtime/locality"
 
 	"github.com/galgotech/heddle-sdk-go/internal/executor/history"
-	"github.com/galgotech/heddle-sdk-go/registry"
+	"github.com/galgotech/heddle-sdk-go/internal/registry"
 )
 
 // workerExecutor coordinates the execution of steps in a worker process,

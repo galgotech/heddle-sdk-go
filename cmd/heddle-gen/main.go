@@ -129,9 +129,6 @@ func main() {
 
 	var steps []StepInfo
 	for _, method := range methods[targetStruct] {
-		if method.Name.Name == "ResolveTypeInput" || method.Name.Name == "ResolveTypeOutput" {
-			continue
-		}
 		if len(method.Type.Params.List) != 4 {
 			continue // ctx, config, in, out
 		}
@@ -335,15 +332,15 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/memory"
 
 	"github.com/galgotech/heddle-lang/pkg/schema"
-	"github.com/galgotech/heddle-sdk-go/registry"
+	"github.com/galgotech/heddle-sdk-go/plugin"
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
-func Register{{.StructName}}Steps(reg registry.Registry, steps *{{.StructName}}) error {
+func Register{{.StructName}}Steps(p *plugin.Plugin, steps *{{.StructName}}) error {
 	var err error
 
 	{{range .Resources}}
-	err = reg.RegisterResource(registry.ResourceRegistration{
+	err = p.RegisterResource(plugin.ResourceRegistration{
 		Name: "{{.Name | printf "%s" | toSnakeCase}}",
 		Init: func(ctx context.Context, configJSON string) (pluginschema.Resource, error) {
 			var cfg map[string]any
@@ -367,7 +364,7 @@ func Register{{.StructName}}Steps(reg registry.Registry, steps *{{.StructName}})
 	{{end}}
 
 	{{range .Steps}}
-	err = reg.RegisterStep(registry.StepRegistration{
+	err = p.RegisterStep(plugin.StepRegistration{
 		Name: "{{.Name}}",
 		ConfigSchema: schema.FieldSchema{
 			Fields: []schema.Field{
@@ -508,7 +505,7 @@ func Register{{.StructName}}Steps(reg registry.Registry, steps *{{.StructName}})
 
 			// inject resources
 			{{range $.Resources}}
-			if resInst, err := reg.GetResource("{{.Name | printf "%s" | toSnakeCase}}"); err == nil {
+			if resInst, err := p.Registry().GetResource("{{.Name | printf "%s" | toSnakeCase}}"); err == nil {
 				if resType, ok := resInst.(*{{.GoType}}); ok {
 					steps.{{.Name}}.SetResource(resType)
 				}
@@ -537,5 +534,4 @@ func Register{{.StructName}}Steps(reg registry.Registry, steps *{{.StructName}})
 
 	return nil
 }
-
 `

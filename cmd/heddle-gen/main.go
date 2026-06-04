@@ -336,7 +336,8 @@ import (
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
-func Register{{.StructName}}Steps(p *plugin.Plugin, steps *{{.StructName}}) error {
+func Register{{.StructName}}Steps(p *plugin.Plugin) error {
+	steps := &{{.StructName}}{}
 	var err error
 
 	{{range .Resources}}

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/apache/arrow/go/v18/arrow"
-	"go.uber.org/zap"
 
 	"github.com/galgotech/heddle-lang/pkg/logger"
 	"github.com/galgotech/heddle-lang/pkg/plugin"
@@ -90,7 +89,7 @@ func (e *workerExecutor) Execute(ctx context.Context, request plugin.ExecuteStep
 	for fieldName, pathRef := range request.InputRef {
 		arr, err := locality.ReadArrowArrayFromPath(pathRef)
 		if err != nil {
-			logger.L().Error("Failed to read input from SHM", zap.Error(err), zap.String("path", pathRef))
+			logger.L().Error("Failed to read input from SHM", logger.Error(err), logger.String("path", pathRef))
 		} else {
 			columns[fieldName] = arr
 			defer arr.Release()
@@ -109,7 +108,7 @@ func (e *workerExecutor) Execute(ctx context.Context, request plugin.ExecuteStep
 
 	result, err := unifiedExecute(ctx, e.registry, execRequest)
 	if err != nil {
-		logger.L().Error("Step execution failed", zap.String("step", request.StepName), zap.Error(err))
+		logger.L().Error("Step execution failed", logger.String("step", request.StepName), logger.Error(err))
 
 		return trackAndReturn(plugin.ExecuteStepResponse{
 			TaskID:       request.TaskID,

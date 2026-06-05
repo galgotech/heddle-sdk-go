@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/galgotech/heddle-lang/pkg/logger"
-	"go.uber.org/zap"
 
 	"github.com/galgotech/heddle-sdk-go/network"
 	"github.com/galgotech/heddle-sdk-go/plugin"
@@ -20,12 +19,12 @@ type Connection struct {
 }
 
 func (r *Connection) Init(ctx context.Context) error {
-	logger.L().Info("Initializing PostgreSQL Connection resource", zap.String("host", r.Host))
+	logger.L().Info("Initializing PostgreSQL Connection resource", logger.String("host", r.Host))
 	return nil
 }
 
 func (r *Connection) Close() error {
-	logger.L().Info("Closing PostgreSQL Connection resource", zap.String("host", r.Host))
+	logger.L().Info("Closing PostgreSQL Connection resource", logger.String("host", r.Host))
 	return nil
 }
 
@@ -92,10 +91,10 @@ func Start() {
 
 	err := RegisterSteps(p)
 	if err != nil {
-		logger.L().Error("Failed to register steps", zap.Error(err))
+		logger.L().Error("Failed to register steps", logger.Error(err))
 	}
 
 	if err := network.Run(context.Background(), p); err != nil {
-		logger.L().Fatal("Failed to run network", zap.Error(err))
+		logger.L().Fatal("Failed to run network", logger.Error(err))
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/apache/arrow/go/v18/arrow/flight"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -78,7 +77,7 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 		// Establish the gRPC connection to the Worker.
 		conn, err = grpc.NewClient(target, opts...)
 		if err != nil {
-			logger.L().Info("Worker not reachable, retrying...", zap.String("target", target))
+			logger.L().Info("Worker not reachable, retrying...", logger.String("target", target))
 
 			select {
 			case <-ctx.Done():
@@ -94,7 +93,7 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 		allSteps := nc.registry.AllSteps()
 		allResources := nc.registry.AllResources()
 
-		logger.L().Info("Preparing plugin registration", zap.Int("steps", len(allSteps)), zap.Int("resources", len(allResources)))
+		logger.L().Info("Preparing plugin registration", logger.Int("steps", len(allSteps)), logger.Int("resources", len(allResources)))
 
 		schemas := make(map[string]schema.StepSchemas)
 
@@ -126,7 +125,7 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 
 		registrationBody, err := json.Marshal(registration)
 		if err != nil {
-			logger.L().Info("Failed to marshal plugin registration...", zap.String("target", target))
+			logger.L().Info("Failed to marshal plugin registration...", logger.String("target", target))
 			return err
 		}
 
@@ -137,7 +136,7 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 			Body: registrationBody,
 		})
 		if err != nil {
-			logger.L().Info("Retrying plugin registration...", zap.String("target", target))
+			logger.L().Info("Retrying plugin registration...", logger.String("target", target))
 			conn.Close()
 
 			select {
@@ -150,7 +149,7 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 
 		// Block until the Worker acknowledges registration.
 		if _, err := res.Recv(); err != nil {
-			logger.L().Info("Waiting for registration result...", zap.String("target", target))
+			logger.L().Info("Waiting for registration result...", logger.String("target", target))
 			conn.Close()
 
 			select {
@@ -161,9 +160,9 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 			}
 		}
 
-		logger.L().Info("Plugin registered", zap.String("namespace", nc.namespace))
-		logger.L().Debug("Plugin registered", zap.String("resources", fmt.Sprintf("%v", registration.Resources)))
-		logger.L().Debug("Plugin registered", zap.String("schemas", fmt.Sprintf("%v", registration.Schemas)))
+		logger.L().Info("Plugin registered", logger.String("namespace", nc.namespace))
+		logger.L().Debug("Plugin registered", logger.String("resources", fmt.Sprintf("%v", registration.Resources)))
+		logger.L().Debug("Plugin registered", logger.String("schemas", fmt.Sprintf("%v", registration.Schemas)))
 
 		// 1.3 Start Heartbeat and Execution Loop
 		// We use a separate context for each connection session
@@ -186,7 +185,7 @@ func (nc *flightNetworkClient) Run(ctx context.Context) error {
 		conn.Close()
 
 		if err != nil {
-			logger.L().Info("Worker connection lost, reconnecting...", zap.String("target", target))
+			logger.L().Info("Worker connection lost, reconnecting...", logger.String("target", target))
 
 			select {
 			case <-ctx.Done():
@@ -220,7 +219,7 @@ func (nc *flightNetworkClient) startHeartbeat(ctx context.Context, client flight
 				Body: body,
 			})
 			if err != nil {
-				logger.L().Error("Heartbeat failed", zap.Error(err))
+				logger.L().Error("Heartbeat failed", logger.Error(err))
 			}
 		case <-ctx.Done():
 			return
@@ -239,7 +238,7 @@ func (nc *flightNetworkClient) startExecutionLoop(ctx context.Context, client fl
 		return fmt.Errorf("failed to start exchange: %w", err)
 	}
 
-	logger.L().Info("Plugin execution loop started", zap.String("namespace", nc.namespace))
+	logger.L().Info("Plugin execution loop started", logger.String("namespace", nc.namespace))
 
 	for {
 		data, err := stream.Recv()
@@ -249,7 +248,7 @@ func (nc *flightNetworkClient) startExecutionLoop(ctx context.Context, client fl
 
 		var request plugin.ExecuteStepRequest
 		if err := json.Unmarshal(data.DataBody, &request); err != nil {
-			logger.L().Error("Failed to unmarshal request", zap.Error(err))
+			logger.L().Error("Failed to unmarshal request", logger.Error(err))
 			continue
 		}
 
@@ -257,18 +256,18 @@ func (nc *flightNetworkClient) startExecutionLoop(ctx context.Context, client fl
 		go func(r plugin.ExecuteStepRequest) {
 			response, err := nc.executor.Execute(ctx, r)
 			if err != nil {
-				logger.L().Error("Execution failed", zap.Error(err))
+				logger.L().Error("Execution failed", logger.Error(err))
 				return
 			}
 
 			responseBody, err := json.Marshal(response)
 			if err != nil {
-				logger.L().Error("Failed to marshal response", zap.Error(err))
+				logger.L().Error("Failed to marshal response", logger.Error(err))
 				return
 			}
 
 			if err := stream.Send(&flight.FlightData{DataBody: responseBody}); err != nil {
-				logger.L().Error("Failed to send response", zap.Error(err))
+				logger.L().Error("Failed to send response", logger.Error(err))
 			}
 		}(request)
 	}

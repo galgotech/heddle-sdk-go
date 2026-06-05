@@ -4,16 +4,11 @@ package example
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
-	"github.com/apache/arrow/go/v18/arrow"
-	"github.com/apache/arrow/go/v18/arrow/array"
-	"github.com/apache/arrow/go/v18/arrow/memory"
 	"github.com/galgotech/heddle-lang/pkg/logger"
 	"go.uber.org/zap"
 
-	"github.com/galgotech/heddle-sdk-go/local"
 	"github.com/galgotech/heddle-sdk-go/network"
 	"github.com/galgotech/heddle-sdk-go/plugin"
 	"github.com/galgotech/heddle-sdk-go/schema"
@@ -100,53 +95,7 @@ func Start() {
 		logger.L().Error("Failed to register steps", zap.Error(err))
 	}
 
-	go network.Run(context.Background(), p)
-}
-
-// Run executes the processing flow locally in-process without worker daemon dependencies.
-func Run() {
-	p := plugin.New("pg")
-
-	err := RegisterSteps(p)
-	if err != nil {
-		logger.L().Error("Failed to register steps", zap.Error(err))
+	if err := network.Run(context.Background(), p); err != nil {
+		logger.L().Fatal("Failed to run network", zap.Error(err))
 	}
-
-	// resource test = pg.connection { host: "pg.internal" }
-	configResource := map[string]any{"host": "pg.internal"}
-
-	err = p.ResourceInstance("d_b", "d_b", configResource)
-	if err != nil {
-		logger.L().Error("Failed to create resource instance", zap.Error(err))
-	}
-
-	// pg.query { sql: "SELECT id AS user_id, country FROM users WHERE id = @user_id" }
-	c := map[string]any{
-		"SQL": "SELECT id AS user_id, country FROM users WHERE id = @user_id",
-	}
-	configBytes, _ := json.Marshal(c)
-
-	inBuilder := array.NewInt64Builder(memory.DefaultAllocator)
-	defer inBuilder.Release()
-	inBuilder.Append(123)
-
-	inputCols := map[string]arrow.Array{
-		"UserID": inBuilder.NewArray(),
-	}
-
-	ctx := context.Background()
-	exec := local.NewLocalRunner(p)
-	output := exec.Execute(ctx, "query", string(configBytes), inputCols)
-
-	fmt.Printf("\n--- Step Direct Execution Result ---\n")
-
-	if outIDArr, ok := output["UserID"].(*array.Int64); ok {
-		if outCountryArr, ok := output["Country"].(*array.String); ok {
-			for i := 0; i < outIDArr.Len(); i++ {
-				fmt.Printf("Row %d: UserID=%d, Country=%s\n", i, outIDArr.Value(i), outCountryArr.Value(i))
-			}
-		}
-	}
-
-	fmt.Printf("-------------------------------------\n\n")
 }

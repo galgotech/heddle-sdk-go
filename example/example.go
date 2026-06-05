@@ -1,6 +1,6 @@
 package example
 
-//go:generate go run github.com/galgotech/heddle-sdk-go/cmd/heddle-gen-offsets
+//go:generate go run github.com/galgotech/heddle-sdk-go/cmd/heddle-gen -struct Steps
 
 import (
 	"context"
@@ -34,11 +34,6 @@ func (r *Connection) Close() error {
 	return nil
 }
 
-// QueryConfig represents the step configuration (`query` parameter in Heddle Step pg.query).
-type QueryConfig struct {
-	Query string `json:"query"`
-}
-
 type SubInput struct {
 	Name string
 }
@@ -47,7 +42,7 @@ type SubInput struct {
 type QueryInput struct {
 	UserID int64
 
-	SubInput schema.Frame[SubInput]
+	SubInput schema.FrameInput[SubInput]
 }
 
 // QueryOutput represents the returned output frame schemas.
@@ -58,10 +53,11 @@ type QueryOutput struct {
 
 // Steps groups all step methods and binds stateful resources.
 type Steps struct {
-	DB schema.ResourceSchema[*Connection]
+	SQL string
+	DB  schema.ResourceSchema[*Connection]
 }
 
-func (s *Steps) TestProducer(ctx context.Context, config QueryConfig, in schema.Void, out schema.Frame[QueryOutput]) error {
+func (s *Steps) TestProducer(ctx context.Context, out schema.FrameOutput[QueryOutput]) error {
 	queryOutput := QueryOutput{
 		UserID:  1,
 		Country: "Brasil",
@@ -72,21 +68,24 @@ func (s *Steps) TestProducer(ctx context.Context, config QueryConfig, in schema.
 }
 
 // Query implements the `pg.query` step behavior.
-func (s *Steps) Query(ctx context.Context, config QueryConfig, in schema.Frame[QueryInput], out schema.Frame[QueryOutput]) error {
+func (s *Steps) Query(ctx context.Context, in schema.FrameInput[QueryInput], out schema.FrameOutput[QueryOutput]) error {
+
 	conn := s.DB.Get()
 	if conn == nil {
 		return fmt.Errorf("PostgreSQL connection DB resource is not initialized or bound!")
 	}
 
-	in.Each(func(item QueryInput) {
+	in.Each(func(item QueryInput) error {
 		output := QueryOutput{}
 		output.UserID = item.UserID
 		output.Country = fmt.Sprintf("US (resolved via %s)", conn.Host)
 
 		out.Add(output)
-		item.SubInput.Each(func(subItem SubInput) {
+		item.SubInput.Each(func(subItem SubInput) error {
 			_ = subItem.Name
+			return nil
 		})
+		return nil
 	})
 
 	return nil
@@ -121,9 +120,9 @@ func Run() {
 		logger.L().Error("Failed to create resource instance", zap.Error(err))
 	}
 
-	// pg.query { query: "SELECT id AS user_id, country FROM users WHERE id = @user_id" }
-	c := QueryConfig{
-		Query: "SELECT id AS user_id, country FROM users WHERE id = @user_id",
+	// pg.query { sql: "SELECT id AS user_id, country FROM users WHERE id = @user_id" }
+	c := map[string]any{
+		"SQL": "SELECT id AS user_id, country FROM users WHERE id = @user_id",
 	}
 	configBytes, _ := json.Marshal(c)
 

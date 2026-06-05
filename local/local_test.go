@@ -28,25 +28,31 @@ type OutputA struct {
 	OutVal string
 }
 
-type PluginASteps struct{}
+type PluginASteps struct {
+	Param string `json:"param"`
+}
 
-func (s PluginASteps) StepA(ctx context.Context, cfg ConfigA, in schema.Frame[InputA], out schema.Frame[OutputA]) error {
-	in.Each(func(item InputA) {
+func (s PluginASteps) StepA(ctx context.Context, in schema.FrameInput[InputA], out schema.FrameOutput[OutputA]) error {
+	in.Each(func(item InputA) error {
 		out.Add(OutputA{
 			OutVal: item.InVal + "_pA",
 		})
+		return nil
 	})
 
 	return nil
 }
 
-type PluginBSteps struct{}
+type PluginBSteps struct {
+	Param string `json:"param"`
+}
 
-func (s PluginBSteps) StepB(ctx context.Context, cfg ConfigA, in schema.Frame[OutputA], out schema.Frame[OutputA]) error {
-	in.Each(func(item OutputA) {
+func (s PluginBSteps) StepB(ctx context.Context, in schema.FrameInput[OutputA], out schema.FrameOutput[OutputA]) error {
+	in.Each(func(item OutputA) error {
 		out.Add(OutputA{
 			OutVal: item.OutVal + "_pB",
 		})
+		return nil
 	})
 
 	return nil

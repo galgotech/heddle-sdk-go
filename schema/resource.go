@@ -17,10 +17,6 @@ func (r ResourceSchema[T]) Get() T {
 	return r.resource
 }
 
-func (r ResourceSchema[T]) IsResource() bool {
-	return true
-}
-
 func (r *ResourceSchema[T]) SetResource(val any) {
 	r.resource = val.(T)
 }

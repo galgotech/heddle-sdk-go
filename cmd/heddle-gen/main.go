@@ -31,11 +31,12 @@ func toSnakeCase(s string) string {
 }
 
 type FieldInfo struct {
-	Name        string
-	ArrowType   string
-	GoType      string
-	IsNested    bool
-	InnerStruct StructInfo
+	Name          string
+	ArrowType     string
+	GoType        string
+	IsNested      bool
+	InnerStruct   StructInfo
+	IsNestedInput bool
 }
 
 type StructInfo struct {
@@ -46,9 +47,9 @@ type StructInfo struct {
 type StepInfo struct {
 	Name       string
 	MethodName string
-	Config     StructInfo
 	Input      StructInfo
 	Output     StructInfo
+	CallArgs   []string
 }
 
 type ResourceInfo struct {
@@ -106,31 +107,46 @@ func main() {
 	}
 
 	var resources []ResourceInfo
+	var configFields []FieldInfo
+
 	for _, field := range stepsStruct.Fields.List {
-		if len(field.Names) == 0 {
+		if len(field.Names) == 0 || !field.Names[0].IsExported() {
 			continue
 		}
-		// find schema.ResourceSchema[*Connection]
+
+		isResource := false
 		switch t := field.Type.(type) {
 		case *ast.IndexExpr:
-			if sel, ok := t.X.(*ast.SelectorExpr); ok {
-				if sel.Sel.Name == "ResourceSchema" {
-					goType := typeToString(t.Index)
-					// remove pointer
-					goType = strings.TrimPrefix(goType, "*")
-					resources = append(resources, ResourceInfo{
-						Name:   field.Names[0].Name,
-						GoType: goType,
-					})
-				}
+			if sel, ok := t.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "ResourceSchema" {
+				isResource = true
+				goType := typeToString(t.Index)
+				goType = strings.TrimPrefix(goType, "*")
+				resources = append(resources, ResourceInfo{
+					Name:   field.Names[0].Name,
+					GoType: goType,
+				})
 			}
+		}
+
+		if !isResource {
+			goType := typeToString(field.Type)
+			configFields = append(configFields, FieldInfo{
+				Name:      field.Names[0].Name,
+				GoType:    goType,
+				ArrowType: goTypeToArrow(goType),
+			})
 		}
 	}
 
 	var steps []StepInfo
 	for _, method := range methods[targetStruct] {
-		if len(method.Type.Params.List) != 4 {
-			continue // ctx, config, in, out
+		if len(method.Type.Params.List) < 1 {
+			continue
+		}
+
+		firstParamType := typeToString(method.Type.Params.List[0].Type)
+		if firstParamType != "context.Context" {
+			continue
 		}
 
 		step := StepInfo{
@@ -138,31 +154,31 @@ func main() {
 			MethodName: method.Name.Name,
 		}
 
-		// Config
-		configTypeName := typeToString(method.Type.Params.List[1].Type)
-		step.Config = extractStructInfo(configTypeName, structs)
+		callArgs := []string{"ctx"}
 
-		// Input Frame
-		inFrameTypeName := extractFrameType(method.Type.Params.List[2].Type)
-		if inFrameTypeName != "" {
-			if inFrameTypeName != "schema.Void" && inFrameTypeName != "Void" {
-				step.Input = extractStructInfo(inFrameTypeName, structs)
+		for _, param := range method.Type.Params.List[1:] {
+			paramType := typeToString(param.Type)
+
+			if strings.HasPrefix(paramType, "schema.FrameInput[") {
+				innerType := strings.TrimSuffix(strings.TrimPrefix(paramType, "schema.FrameInput["), "]")
+				step.Input = extractStructInfo(innerType, structs)
+				callArgs = append(callArgs, "inFrame")
+			} else if strings.HasPrefix(paramType, "schema.FrameOutput[") {
+				innerType := strings.TrimSuffix(strings.TrimPrefix(paramType, "schema.FrameOutput["), "]")
+				step.Output = extractStructInfo(innerType, structs)
+				callArgs = append(callArgs, "outFrame")
+			} else if paramType == "schema.Void" || paramType == "Void" {
+				// Ignored, schema.Void is removed. Wait, do we add an empty argument? No.
 			}
 		}
 
-		// Output Frame
-		outFrameTypeName := extractFrameType(method.Type.Params.List[3].Type)
-		if outFrameTypeName != "" {
-			if outFrameTypeName != "schema.Void" && outFrameTypeName != "Void" {
-				step.Output = extractStructInfo(outFrameTypeName, structs)
-			}
-		}
-
+		step.CallArgs = callArgs
 		steps = append(steps, step)
 	}
 
 	tmpl := template.Must(template.New("gen").Funcs(template.FuncMap{
 		"toSnakeCase": toSnakeCase,
+		"join":        strings.Join,
 		"arrowBuilder": func(arrowType string) string {
 			switch arrowType {
 			case "int64":
@@ -215,10 +231,11 @@ func main() {
 
 	var buf bytes.Buffer
 	err = tmpl.Execute(&buf, map[string]interface{}{
-		"Package":    pkgName,
-		"StructName": targetStruct,
-		"Steps":      steps,
-		"Resources":  resources,
+		"Package":      pkgName,
+		"StructName":   targetStruct,
+		"Steps":        steps,
+		"Resources":    resources,
+		"ConfigFields": configFields,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -237,24 +254,6 @@ func main() {
 	}
 }
 
-func extractFrameType(expr ast.Expr) string {
-	switch t := expr.(type) {
-	case *ast.IndexExpr:
-		if sel, ok := t.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "Frame" {
-			return typeToString(t.Index)
-		}
-	case *ast.SelectorExpr:
-		if t.Sel.Name == "Void" {
-			return "schema.Void"
-		}
-	case *ast.Ident:
-		if t.Name == "Void" {
-			return "schema.Void"
-		}
-	}
-	return ""
-}
-
 func extractStructInfo(name string, structs map[string]*ast.StructType) StructInfo {
 	s, ok := structs[name]
 	if !ok {
@@ -267,15 +266,20 @@ func extractStructInfo(name string, structs map[string]*ast.StructType) StructIn
 			continue
 		}
 		goType := typeToString(field.Type)
-		if strings.HasPrefix(goType, "schema.Frame") {
-			innerType := strings.TrimSuffix(strings.TrimPrefix(goType, "schema.Frame["), "]")
+		if strings.HasPrefix(goType, "schema.FrameInput[") || strings.HasPrefix(goType, "schema.FrameOutput[") || strings.HasPrefix(goType, "schema.Frame[") {
+			innerType := goType
+			innerType = strings.TrimPrefix(innerType, "schema.FrameInput[")
+			innerType = strings.TrimPrefix(innerType, "schema.FrameOutput[")
+			innerType = strings.TrimPrefix(innerType, "schema.Frame[")
+			innerType = strings.TrimSuffix(innerType, "]")
 			innerStruct := extractStructInfo(innerType, structs)
 			info.Fields = append(info.Fields, FieldInfo{
-				Name:        field.Names[0].Name,
-				GoType:      goType,
-				ArrowType:   "list",
-				IsNested:    true,
-				InnerStruct: innerStruct,
+				Name:          field.Names[0].Name,
+				GoType:        goType,
+				ArrowType:     "list",
+				IsNested:      true,
+				InnerStruct:   innerStruct,
+				IsNestedInput: strings.HasPrefix(goType, "schema.FrameInput[") || strings.HasPrefix(goType, "schema.Frame["),
 			})
 			continue
 		}
@@ -336,8 +340,8 @@ import (
 	pluginschema "github.com/galgotech/heddle-sdk-go/schema"
 )
 
-func Register{{.StructName}}Steps(p *plugin.Plugin) error {
-	steps := &{{.StructName}}{}
+func Register{{if eq .StructName "Steps"}}{{.StructName}}{{else}}{{.StructName}}Steps{{end}}(p *plugin.Plugin) error {
+	globalSteps := &{{.StructName}}{}
 	var err error
 
 	{{range .Resources}}
@@ -369,7 +373,7 @@ func Register{{.StructName}}Steps(p *plugin.Plugin) error {
 		Name: "{{.Name}}",
 		ConfigSchema: schema.FieldSchema{
 			Fields: []schema.Field{
-				{{range .Config.Fields}}
+				{{range $.ConfigFields}}
 				{Name: "{{.Name}}", Type: "{{.ArrowType}}"},
 				{{end}}
 			},
@@ -397,9 +401,9 @@ func Register{{.StructName}}Steps(p *plugin.Plugin) error {
 		OutputSchema: schema.FrameSchema{},
 		{{end}}
 		Invoke: func(ctx context.Context, configJSON string, inColumns map[string]arrow.Array) (map[string]arrow.Array, error) {
-			var cfg {{.Config.Name}}
+			stepInst := *globalSteps
 			if configJSON != "" {
-				if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+				if err := json.Unmarshal([]byte(configJSON), &stepInst); err != nil {
 					return nil, err
 				}
 			}
@@ -423,12 +427,15 @@ func Register{{.StructName}}Steps(p *plugin.Plugin) error {
 			}
 			{{end}}
 
-			inFrame := pluginschema.Frame[{{.Input.Name}}]{
-				Iterator: func(yield func(item {{.Input.Name}})) error {
+			outBuilder__errors := array.NewStringBuilder(memory.DefaultAllocator)
+			defer outBuilder__errors.Release()
+
+			inFrame := pluginschema.FrameInput[{{.Input.Name}}]{
+				Iterator: func(yield func(item {{.Input.Name}}) error) error {
 					for i := 0; i < inLen; i++ {
 						{{range .Input.Fields}}
 						{{if .IsNested}}
-						var nestedFrame_{{.Name}} pluginschema.Frame[{{.InnerStruct.Name}}]
+						{{if .IsNestedInput}}var nestedFrame_{{.Name}} pluginschema.FrameInput[{{.InnerStruct.Name}}]{{else}}var nestedFrame_{{.Name}} pluginschema.FrameOutput[{{.InnerStruct.Name}}]{{end}}
 						if in_{{.Name}} != nil && !in_{{.Name}}.IsNull(i) {
 							start := int(in_{{.Name}}.Offsets()[i])
 							end := int(in_{{.Name}}.Offsets()[i+1])
@@ -450,8 +457,9 @@ func Register{{.StructName}}Steps(p *plugin.Plugin) error {
 									}
 								}
 								
-								nestedFrame_{{.Name}} = pluginschema.Frame[{{.InnerStruct.Name}}]{
-									Iterator: func(y func(m {{.InnerStruct.Name}})) error {
+								{{if .IsNestedInput}}
+								nestedFrame_{{.Name}} = pluginschema.FrameInput[{{.InnerStruct.Name}}]{
+									Iterator: func(y func(m {{.InnerStruct.Name}}) error) error {
 										for j := start; j < end; j++ {
 											m := {{.InnerStruct.Name}}{}
 											{{range .InnerStruct.Fields}}
@@ -459,11 +467,16 @@ func Register{{.StructName}}Steps(p *plugin.Plugin) error {
 												m.{{.Name}} = l_{{.Name}}.Value(j)
 											}
 											{{end}}
-											y(m)
+											if err := y(m); err != nil {
+												itemBytes, _ := json.Marshal(m)
+												errorPayload, _ := json.Marshal(map[string]any{"error": err.Error(), "item": json.RawMessage(itemBytes)})
+												outBuilder__errors.Append(string(errorPayload))
+											}
 										}
 										return nil
 									},
 								}
+								{{end}}
 							}
 						}
 						{{end}}
@@ -478,13 +491,15 @@ func Register{{.StructName}}Steps(p *plugin.Plugin) error {
 							{{end}}
 							{{end}}
 						}
-						yield(item)
+						if err := yield(item); err != nil {
+							itemBytes, _ := json.Marshal(item)
+							errorPayload, _ := json.Marshal(map[string]any{"error": err.Error(), "item": json.RawMessage(itemBytes)})
+							outBuilder__errors.Append(string(errorPayload))
+						}
 					}
 					return nil
 				},
 			}
-			{{else}}
-			inFrame := pluginschema.Void{}
 			{{end}}
 
 			{{if .Output.Name}}
@@ -493,27 +508,25 @@ func Register{{.StructName}}Steps(p *plugin.Plugin) error {
 			defer outBuilder_{{.Name}}.Release()
 			{{end}}
 
-			outFrame := pluginschema.Frame[{{.Output.Name}}]{
+			outFrame := pluginschema.FrameOutput[{{.Output.Name}}]{
 				Appender: func(item {{.Output.Name}}) {
 					{{range .Output.Fields}}
 					outBuilder_{{.Name}}.Append(item.{{.Name}})
 					{{end}}
 				},
 			}
-			{{else}}
-			outFrame := pluginschema.Void{}
 			{{end}}
 
 			// inject resources
 			{{range $.Resources}}
 			if resInst, err := p.Registry().GetResource("{{.Name | printf "%s" | toSnakeCase}}"); err == nil {
 				if resType, ok := resInst.(*{{.GoType}}); ok {
-					steps.{{.Name}}.SetResource(resType)
+					stepInst.{{.Name}}.SetResource(resType)
 				}
 			}
 			{{end}}
 
-			err := steps.{{.MethodName}}(ctx, cfg, inFrame, outFrame)
+			err := stepInst.{{.MethodName}}({{join .CallArgs ", "}})
 			if err != nil {
 				return nil, err
 			}
@@ -523,6 +536,12 @@ func Register{{.StructName}}Steps(p *plugin.Plugin) error {
 			{{range .Output.Fields}}
 			outColumns["{{.Name}}"] = outBuilder_{{.Name}}.NewArray()
 			{{end}}
+			{{end}}
+
+			{{if .Input.Name}}
+			if outBuilder__errors.Len() > 0 {
+				outColumns["_errors"] = outBuilder__errors.NewArray()
+			}
 			{{end}}
 
 			return outColumns, nil

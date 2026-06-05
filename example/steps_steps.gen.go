@@ -15,7 +15,7 @@ import (
 )
 
 func RegisterSteps(p *plugin.Plugin) error {
-	steps := &Steps{}
+	globalSteps := &Steps{}
 	var err error
 
 	err = p.RegisterResource(plugin.ResourceRegistration{
@@ -45,7 +45,7 @@ func RegisterSteps(p *plugin.Plugin) error {
 		ConfigSchema: schema.FieldSchema{
 			Fields: []schema.Field{
 
-				{Name: "Query", Type: "utf8"},
+				{Name: "SQL", Type: "utf8"},
 			},
 		},
 
@@ -61,14 +61,12 @@ func RegisterSteps(p *plugin.Plugin) error {
 		},
 
 		Invoke: func(ctx context.Context, configJSON string, inColumns map[string]arrow.Array) (map[string]arrow.Array, error) {
-			var cfg QueryConfig
+			stepInst := *globalSteps
 			if configJSON != "" {
-				if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+				if err := json.Unmarshal([]byte(configJSON), &stepInst); err != nil {
 					return nil, err
 				}
 			}
-
-			inFrame := pluginschema.Void{}
 
 			outBuilder_UserID := array.NewInt64Builder(memory.DefaultAllocator)
 			defer outBuilder_UserID.Release()
@@ -76,7 +74,7 @@ func RegisterSteps(p *plugin.Plugin) error {
 			outBuilder_Country := array.NewStringBuilder(memory.DefaultAllocator)
 			defer outBuilder_Country.Release()
 
-			outFrame := pluginschema.Frame[QueryOutput]{
+			outFrame := pluginschema.FrameOutput[QueryOutput]{
 				Appender: func(item QueryOutput) {
 
 					outBuilder_UserID.Append(item.UserID)
@@ -90,11 +88,11 @@ func RegisterSteps(p *plugin.Plugin) error {
 
 			if resInst, err := p.Registry().GetResource("d_b"); err == nil {
 				if resType, ok := resInst.(*Connection); ok {
-					steps.DB.SetResource(resType)
+					stepInst.DB.SetResource(resType)
 				}
 			}
 
-			err := steps.TestProducer(ctx, cfg, inFrame, outFrame)
+			err := stepInst.TestProducer(ctx, outFrame)
 			if err != nil {
 				return nil, err
 			}
@@ -117,7 +115,7 @@ func RegisterSteps(p *plugin.Plugin) error {
 		ConfigSchema: schema.FieldSchema{
 			Fields: []schema.Field{
 
-				{Name: "Query", Type: "utf8"},
+				{Name: "SQL", Type: "utf8"},
 			},
 		},
 
@@ -140,9 +138,9 @@ func RegisterSteps(p *plugin.Plugin) error {
 		},
 
 		Invoke: func(ctx context.Context, configJSON string, inColumns map[string]arrow.Array) (map[string]arrow.Array, error) {
-			var cfg QueryConfig
+			stepInst := *globalSteps
 			if configJSON != "" {
-				if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+				if err := json.Unmarshal([]byte(configJSON), &stepInst); err != nil {
 					return nil, err
 				}
 			}
@@ -160,11 +158,14 @@ func RegisterSteps(p *plugin.Plugin) error {
 				inLen = in_UserID.Len()
 			}
 
-			inFrame := pluginschema.Frame[QueryInput]{
-				Iterator: func(yield func(item QueryInput)) error {
+			outBuilder__errors := array.NewStringBuilder(memory.DefaultAllocator)
+			defer outBuilder__errors.Release()
+
+			inFrame := pluginschema.FrameInput[QueryInput]{
+				Iterator: func(yield func(item QueryInput) error) error {
 					for i := 0; i < inLen; i++ {
 
-						var nestedFrame_SubInput pluginschema.Frame[SubInput]
+						var nestedFrame_SubInput pluginschema.FrameInput[SubInput]
 						if in_SubInput != nil && !in_SubInput.IsNull(i) {
 							start := int(in_SubInput.Offsets()[i])
 							end := int(in_SubInput.Offsets()[i+1])
@@ -185,8 +186,8 @@ func RegisterSteps(p *plugin.Plugin) error {
 									}
 								}
 
-								nestedFrame_SubInput = pluginschema.Frame[SubInput]{
-									Iterator: func(y func(m SubInput)) error {
+								nestedFrame_SubInput = pluginschema.FrameInput[SubInput]{
+									Iterator: func(y func(m SubInput) error) error {
 										for j := start; j < end; j++ {
 											m := SubInput{}
 
@@ -194,11 +195,16 @@ func RegisterSteps(p *plugin.Plugin) error {
 												m.Name = l_Name.Value(j)
 											}
 
-											y(m)
+											if err := y(m); err != nil {
+												itemBytes, _ := json.Marshal(m)
+												errorPayload, _ := json.Marshal(map[string]any{"error": err.Error(), "item": json.RawMessage(itemBytes)})
+												outBuilder__errors.Append(string(errorPayload))
+											}
 										}
 										return nil
 									},
 								}
+
 							}
 						}
 
@@ -208,7 +214,11 @@ func RegisterSteps(p *plugin.Plugin) error {
 
 							SubInput: nestedFrame_SubInput,
 						}
-						yield(item)
+						if err := yield(item); err != nil {
+							itemBytes, _ := json.Marshal(item)
+							errorPayload, _ := json.Marshal(map[string]any{"error": err.Error(), "item": json.RawMessage(itemBytes)})
+							outBuilder__errors.Append(string(errorPayload))
+						}
 					}
 					return nil
 				},
@@ -220,7 +230,7 @@ func RegisterSteps(p *plugin.Plugin) error {
 			outBuilder_Country := array.NewStringBuilder(memory.DefaultAllocator)
 			defer outBuilder_Country.Release()
 
-			outFrame := pluginschema.Frame[QueryOutput]{
+			outFrame := pluginschema.FrameOutput[QueryOutput]{
 				Appender: func(item QueryOutput) {
 
 					outBuilder_UserID.Append(item.UserID)
@@ -234,11 +244,11 @@ func RegisterSteps(p *plugin.Plugin) error {
 
 			if resInst, err := p.Registry().GetResource("d_b"); err == nil {
 				if resType, ok := resInst.(*Connection); ok {
-					steps.DB.SetResource(resType)
+					stepInst.DB.SetResource(resType)
 				}
 			}
 
-			err := steps.Query(ctx, cfg, inFrame, outFrame)
+			err := stepInst.Query(ctx, inFrame, outFrame)
 			if err != nil {
 				return nil, err
 			}
@@ -248,6 +258,10 @@ func RegisterSteps(p *plugin.Plugin) error {
 			outColumns["UserID"] = outBuilder_UserID.NewArray()
 
 			outColumns["Country"] = outBuilder_Country.NewArray()
+
+			if outBuilder__errors.Len() > 0 {
+				outColumns["_errors"] = outBuilder__errors.NewArray()
+			}
 
 			return outColumns, nil
 		},

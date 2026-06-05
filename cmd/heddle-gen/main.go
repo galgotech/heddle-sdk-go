@@ -379,26 +379,22 @@ func Register{{if eq .StructName "Steps"}}{{.StructName}}{{else}}{{.StructName}}
 			},
 		},
 		{{if .Input.Name}}
-		InputSchema: schema.FrameSchema{
-			Columns: []schema.ColumnSchema{
+		InputSchema: []schema.ColumnSchema{
 				{{range .Input.Fields}}
 				{Name: "{{.Name}}", ArrowType: "{{.ArrowType}}"},
 				{{end}}
-			},
 		},
 		{{else}}
-		InputSchema: schema.FrameSchema{},
+		InputSchema: []schema.ColumnSchema{},
 		{{end}}
 		{{if .Output.Name}}
-		OutputSchema: schema.FrameSchema{
-			Columns: []schema.ColumnSchema{
-				{{range .Output.Fields}}
-				{Name: "{{.Name}}", ArrowType: "{{.ArrowType}}"},
-				{{end}}
-			},
+		OutputSchema: []schema.ColumnSchema{
+			{{range .Output.Fields}}
+			{Name: "{{.Name}}", ArrowType: "{{.ArrowType}}"},
+			{{end}}
 		},
 		{{else}}
-		OutputSchema: schema.FrameSchema{},
+		OutputSchema: []schema.ColumnSchema{},
 		{{end}}
 		Invoke: func(ctx context.Context, configJSON string, inColumns map[string]arrow.Array) (map[string]arrow.Array, error) {
 			stepInst := *globalSteps

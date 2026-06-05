@@ -10,8 +10,8 @@ import (
 type StepRegistration struct {
 	Name         string
 	ConfigSchema schema.FieldSchema
-	InputSchema  schema.FrameSchema
-	OutputSchema schema.FrameSchema
+	InputSchema  []schema.ColumnSchema
+	OutputSchema []schema.ColumnSchema
 
 	Invoke func(ctx context.Context, configJSON string, inColumns map[string]arrow.Array) (map[string]arrow.Array, error)
 
